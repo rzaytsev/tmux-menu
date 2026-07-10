@@ -1,0 +1,3 @@
+bin/
+*.log
+coverage.out

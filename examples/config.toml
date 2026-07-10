@@ -1,0 +1,106 @@
+[palette]
+# Available sections: "agents", "sessions", "panes".
+sections = ["sessions", "panes"]
+
+[picker]
+# Show helper lines above fzf results.
+show_help = false
+
+[projects]
+# Root directories scanned by the projects view.
+roots = ["~/projects"]
+# File that marks a project as having native tmux bootstrap.
+bootstrap_file = ".tmux-sessionizer"
+
+[[commands]]
+title = "Lazygit"
+category = "Tools"
+mode = "popup"
+cmd = "lazygit"
+
+[[commands]]
+title = "Tig"
+category = "Tools"
+mode = "popup"
+cmd = "tig"
+
+[[commands]]
+title = "Git status"
+category = "Git"
+mode = "paste"
+cmd = "git status"
+# Optional: only show this command in a matching tmux session.
+# session = "tmux-menu"
+enter = true
+
+[[commands]]
+title = "Git diff"
+category = "Git"
+mode = "paste"
+cmd = "git diff"
+# session = "tmux-menu"
+enter = true
+
+[[quick_dirs]]
+title = "documents"
+path = "~/Documents"
+# Optional: run after changing into the directory.
+# command = "git status"
+
+[[quick_dirs]]
+title = "config"
+path = "~/.config"
+
+[[quick_dirs]]
+title = "projects"
+path = "~/projects"
+
+[popup]
+width = "90%"
+height = "80%"
+border = "rounded"
+
+[editor]
+command = "$EDITOR"
+
+[editor.popup]
+width = "80%"
+height = "80%"
+border = "rounded"
+
+[links.alternate]
+# Secondary opener used by Alt-Enter in the links view.
+# Use {} when the target must appear before later command arguments.
+key = "alt-enter"
+file_command = "open -a TextEdit"
+url_command = "open -a Safari"
+
+[links.open]
+# Enter opener for file links: popup, pane, or window.
+mode = "popup"
+# Used when mode = "pane": right, left, above, or below.
+pane_side = "right"
+
+[bookmarks]
+# Markdown directories scanned by the bookmarks view, in display order.
+# {project} expands to the current tmux project/session name.
+dirs = ["~/notes/projects/{project}", "~/projects/{project}"]
+ignore_patterns = [".git", ".tmp", "vendor"]
+
+[bookmarks.open]
+# Opener for local file bookmarks: popup, pane, or window.
+mode = "pane"
+pane_side = "right"
+
+[status]
+# Relative paths resolve from the current tmux session root.
+status_dir = ["./todo"]
+# Status subdirectories shown under each status_dir, in display order.
+statuses = ["new", "doing", "done"]
+preview_command = "glow"
+ignore_patterns = [".gitkeep"]
+
+[status.open]
+# Opener for selected status files: popup, pane, or window.
+mode = "pane"
+pane_side = "below"
