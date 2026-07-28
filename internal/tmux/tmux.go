@@ -11,19 +11,20 @@ import (
 const sep = "\x1f"
 
 type Pane struct {
-	SessionName    string
-	SessionID      string
-	WindowName     string
-	WindowID       string
-	WindowIndex    string
-	PaneIndex      string
-	PaneID         string
-	PanePID        string
-	PaneTitle      string
-	CurrentCommand string
-	CurrentPath    string
-	PaneActive     bool
-	WindowActive   bool
+	SessionName     string
+	SessionID       string
+	WindowName      string
+	WindowID        string
+	WindowIndex     string
+	PaneIndex       string
+	PaneID          string
+	PanePID         string
+	PaneTitle       string
+	CurrentCommand  string
+	CurrentPath     string
+	PaneActive      bool
+	WindowActive    bool
+	AutomaticRename bool
 }
 
 func Run(ctx context.Context, args ...string) (string, error) {
@@ -59,6 +60,7 @@ func ListPanes(ctx context.Context) ([]Pane, error) {
 		"#{pane_active}",
 		"#{window_active}",
 		"#{pane_pid}",
+		"#{automatic-rename}",
 	}, sep)
 	out, err := Run(ctx, "list-panes", "-a", "-F", format)
 	if err != nil {
@@ -81,20 +83,25 @@ func ParsePanes(out string) []Pane {
 		if len(parts) > 12 {
 			panePID = parts[12]
 		}
+		automaticRename := false
+		if len(parts) > 13 {
+			automaticRename = parts[13] == "1"
+		}
 		panes = append(panes, Pane{
-			SessionName:    parts[0],
-			SessionID:      parts[1],
-			WindowName:     parts[2],
-			WindowID:       parts[3],
-			WindowIndex:    parts[4],
-			PaneIndex:      parts[5],
-			PaneID:         parts[6],
-			PanePID:        panePID,
-			PaneTitle:      parts[7],
-			CurrentCommand: parts[8],
-			CurrentPath:    parts[9],
-			PaneActive:     parts[10] == "1",
-			WindowActive:   parts[11] == "1",
+			SessionName:     parts[0],
+			SessionID:       parts[1],
+			WindowName:      parts[2],
+			WindowID:        parts[3],
+			WindowIndex:     parts[4],
+			PaneIndex:       parts[5],
+			PaneID:          parts[6],
+			PanePID:         panePID,
+			PaneTitle:       parts[7],
+			CurrentCommand:  parts[8],
+			CurrentPath:     parts[9],
+			PaneActive:      parts[10] == "1",
+			WindowActive:    parts[11] == "1",
+			AutomaticRename: automaticRename,
 		})
 	}
 	return panes

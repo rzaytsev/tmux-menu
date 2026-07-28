@@ -352,6 +352,13 @@ roots = ["~/projects", "~/work"]
 
 Use `agents` when you run agents in separate panes. tmux-menu detects known
 agent commands and uses pane/window titles for richer status when available.
+Rows show the detected agent type before the session name: Codex is green,
+Claude is orange, and generic foreground commands such as `node` are hidden.
+
+In the main palette, panes in windows with `automatic-rename` disabled are
+shown as `<window name> | <pane title>`. The window name repeats for split panes
+while each pane keeps its own title. Automatically renamed windows retain the
+existing pane-title-only display.
 
 ### Open File References From Build Output
 

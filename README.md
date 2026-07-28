@@ -5,6 +5,7 @@ Small Go command palette for tmux.
 `tmux-menu` opens tmux pickers through `fzf` so you can jump between sessions,
 panes, agent panes, project directories, links, bookmarks, tools, and task
 files without leaving the keyboard.
+Manually named tmux windows are shown alongside each pane's own title.
 
 ## Requirements
 

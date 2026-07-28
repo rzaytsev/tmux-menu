@@ -8,7 +8,7 @@ import (
 )
 
 func TestParsePanes(t *testing.T) {
-	line := "work" + sep + "$1" + sep + "api" + sep + "@2" + sep + "1" + sep + "0" + sep + "%3" + sep + "server" + sep + "codex" + sep + "/tmp/project" + sep + "1" + sep + "1" + sep + "1234"
+	line := "work" + sep + "$1" + sep + "api" + sep + "@2" + sep + "1" + sep + "0" + sep + "%3" + sep + "server" + sep + "codex" + sep + "/tmp/project" + sep + "1" + sep + "1" + sep + "1234" + sep + "0"
 	panes := ParsePanes(line)
 	if len(panes) != 1 {
 		t.Fatalf("got %d panes", len(panes))
@@ -22,6 +22,9 @@ func TestParsePanes(t *testing.T) {
 	}
 	if !p.PaneActive || !p.WindowActive {
 		t.Fatalf("active flags not parsed: %#v", p)
+	}
+	if p.AutomaticRename {
+		t.Fatalf("automatic-rename should be disabled: %#v", p)
 	}
 }
 
@@ -38,14 +41,14 @@ func TestRunIncludesTmuxStderrOnFailure(t *testing.T) {
 }
 
 func TestListPanesUsesTmuxCommandPath(t *testing.T) {
-	line := "work" + sep + "$1" + sep + "api" + sep + "@2" + sep + "1" + sep + "0" + sep + "%3" + sep + "server" + sep + "codex" + sep + "/tmp/project" + sep + "1" + sep + "1" + sep + "1234"
+	line := "work" + sep + "$1" + sep + "api" + sep + "@2" + sep + "1" + sep + "0" + sep + "%3" + sep + "server" + sep + "codex" + sep + "/tmp/project" + sep + "1" + sep + "1" + sep + "1234" + sep + "1"
 	writeFakeTmux(t, "printf '%s\\n' '"+line+"'\n")
 
 	panes, err := ListPanes(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(panes) != 1 || panes[0].PaneID != "%3" || panes[0].PanePID != "1234" {
+	if len(panes) != 1 || panes[0].PaneID != "%3" || panes[0].PanePID != "1234" || !panes[0].AutomaticRename {
 		t.Fatalf("panes = %#v", panes)
 	}
 }

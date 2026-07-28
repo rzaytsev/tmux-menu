@@ -43,7 +43,7 @@ func agentItemsWithProcessSnapshot(panes []tmux.Pane, currentPaneID string, snap
 	items := make([]picker.Item[menuItem], 0, len(agents))
 	for _, p := range agents {
 		items = append(items, picker.Item[menuItem]{
-			Label: agentPaneLabel(p, currentPaneID, agentPaneStatus(p, snapshot)),
+			Label: agentPaneLabel(p, currentPaneID, agentPaneStatus(p, snapshot), agentPaneName(p, snapshot)),
 			Value: menuItem{dispatch: action.SwitchPane(p)},
 		})
 	}
@@ -107,6 +107,26 @@ func processAgentPaneStatus(p tmux.Pane, snapshot processSnapshot) agentStatus {
 		return status
 	}
 	return agentStatusUnknown
+}
+
+func agentPaneName(p tmux.Pane, snapshot processSnapshot) string {
+	if name := knownAgentName(p.CurrentCommand); name != "" {
+		return name
+	}
+	if name := knownAgentName(p.PaneTitle); name != "" {
+		return name
+	}
+	pid, err := strconv.Atoi(p.PanePID)
+	if err == nil && snapshot.names[pid] != "" {
+		return snapshot.names[pid]
+	}
+	if _, ok := codexPaneTitleInfoFromPane(p); ok {
+		return "codex"
+	}
+	if _, ok := claudeStatusFromPaneTitle(p.PaneTitle); ok {
+		return "claude"
+	}
+	return "agent"
 }
 
 type codexPaneTitleInfo struct {
@@ -319,6 +339,7 @@ type processInfo struct {
 type processSnapshot struct {
 	roots    map[int]bool
 	statuses map[int]agentStatus
+	names    map[int]string
 }
 
 func agentProcessSnapshot() processSnapshot {
@@ -331,61 +352,68 @@ func agentProcessSnapshot() processSnapshot {
 
 func buildProcessSnapshot(processes []processInfo) processSnapshot {
 	children := make(map[int][]int)
-	agents := make(map[int]bool)
+	agents := make(map[int]string)
 	processByPID := make(map[int]processInfo)
 	for _, p := range processes {
 		processByPID[p.pid] = p
 		children[p.ppid] = append(children[p.ppid], p.pid)
-		if processCommandClass(p.command) == "agent" {
-			agents[p.pid] = true
+		if name := processAgentName(p.command); name != "" {
+			agents[p.pid] = name
 		}
 	}
 	roots := make(map[int]bool)
 	statuses := make(map[int]agentStatus)
+	names := make(map[int]string)
 	visiting := make(map[int]bool)
-	var scan func(int) (bool, bool)
-	scan = func(pid int) (bool, bool) {
+	var scan func(int) (bool, bool, string)
+	scan = func(pid int) (bool, bool, string) {
 		if roots[pid] {
-			return true, statuses[pid] == agentStatusWorking
+			return true, statuses[pid] == agentStatusWorking, names[pid]
 		}
-		if agents[pid] {
+		if name := agents[pid]; name != "" {
 			roots[pid] = true
+			names[pid] = name
 			working := processLooksRunning(processByPID[pid])
 			if working {
 				statuses[pid] = agentStatusWorking
 			} else {
 				statuses[pid] = agentStatusWaiting
 			}
-			return true, working
+			return true, working, name
 		}
 		if visiting[pid] {
-			return false, false
+			return false, false, ""
 		}
 		visiting[pid] = true
 		defer delete(visiting, pid)
 		found := false
 		working := false
+		name := ""
 		for _, child := range children[pid] {
-			childFound, childWorking := scan(child)
+			childFound, childWorking, childName := scan(child)
 			if childFound {
 				found = true
 				working = working || childWorking
+				if name == "" {
+					name = childName
+				}
 			}
 		}
 		if found {
 			roots[pid] = true
+			names[pid] = name
 			if working {
 				statuses[pid] = agentStatusWorking
 			} else {
 				statuses[pid] = agentStatusWaiting
 			}
 		}
-		return found, working
+		return found, working, name
 	}
 	for _, p := range processes {
 		scan(p.pid)
 	}
-	return processSnapshot{roots: roots, statuses: statuses}
+	return processSnapshot{roots: roots, statuses: statuses, names: names}
 }
 
 func processLooksRunning(p processInfo) bool {

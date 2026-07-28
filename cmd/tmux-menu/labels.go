@@ -33,6 +33,9 @@ func paneLabel(p tmux.Pane, currentPaneID string) string {
 	if title == "" {
 		title = p.CurrentCommand
 	}
+	if !p.AutomaticRename && p.WindowName != "" && p.WindowName != title {
+		title = p.WindowName + " | " + title
+	}
 	path := shortenHome(p.CurrentPath)
 	state := ""
 	if p.PaneID == currentPaneID {
@@ -42,14 +45,14 @@ func paneLabel(p tmux.Pane, currentPaneID string) string {
 		colorKind("pane"), dim(p.SessionName+"/"+p.WindowIndex+"."+p.PaneIndex), colorPaneTitle(title), colorCommand(p.CurrentCommand), dim(path), state)
 }
 
-func agentPaneLabel(p tmux.Pane, currentPaneID string, status agentStatus) string {
+func agentPaneLabel(p tmux.Pane, currentPaneID string, status agentStatus, name string) string {
 	title := agentPaneTitle(p)
 	state := ""
 	if p.PaneID == currentPaneID {
 		state = "  " + dim("current")
 	}
-	return fmt.Sprintf("%s    %s  %s  %s  %s  %s%s",
-		colorKind("agent"), dim(p.SessionName+"/"+p.WindowIndex+"."+p.PaneIndex), colorPaneTitle(title), colorCommand(p.CurrentCommand), colorAgentStatus(status), dim(shortenHome(p.CurrentPath)), state)
+	return fmt.Sprintf("%s  %s  %s  %s  %s%s",
+		colorAgentName(name), dim(p.SessionName+"/"+p.WindowIndex+"."+p.PaneIndex), colorPaneTitle(title), colorAgentStatus(status), dim(shortenHome(p.CurrentPath)), state)
 }
 
 func agentPaneTitle(p tmux.Pane) string {
@@ -128,6 +131,7 @@ const (
 	ansiCyan    = "\x1b[36m"
 	ansiGreen   = "\x1b[32m"
 	ansiMagenta = "\x1b[35m"
+	ansiOrange  = "\x1b[38;5;208m"
 	ansiRed     = "\x1b[31m"
 	ansiYellow  = "\x1b[33m"
 )
@@ -168,15 +172,21 @@ func colorAgentStatus(status agentStatus) string {
 	}
 }
 
+func colorAgentName(name string) string {
+	switch name {
+	case "codex":
+		return ansiGreen + name + ansiReset
+	case "claude":
+		return ansiOrange + name + ansiReset
+	default:
+		return ansiMagenta + name + ansiReset
+	}
+}
+
 func commandClass(command string) string {
 	command = strings.ToLower(command)
 	switch {
-	case strings.Contains(command, "codex"),
-		strings.Contains(command, "claude"),
-		strings.Contains(command, "opencode"),
-		strings.Contains(command, "aider"),
-		strings.Contains(command, "cursor-agent"),
-		strings.Contains(command, "gemini"):
+	case knownAgentName(command) != "":
 		return "agent"
 	case strings.Contains(command, "mosh"),
 		strings.Contains(command, "ssh"):
@@ -186,14 +196,41 @@ func commandClass(command string) string {
 	}
 }
 
+func knownAgentName(command string) string {
+	command = strings.ToLower(command)
+	switch {
+	case strings.Contains(command, "codex"):
+		return "codex"
+	case strings.Contains(command, "claude"):
+		return "claude"
+	case strings.Contains(command, "opencode"):
+		return "opencode"
+	case strings.Contains(command, "cursor-agent"):
+		return "cursor-agent"
+	case strings.Contains(command, "aider"):
+		return "aider"
+	case strings.Contains(command, "gemini"):
+		return "gemini"
+	default:
+		return ""
+	}
+}
+
 func processCommandClass(command string) string {
+	if processAgentName(command) != "" {
+		return "agent"
+	}
+	return ""
+}
+
+func processAgentName(command string) string {
 	for _, field := range strings.Fields(command) {
 		name := strings.Trim(field, `"'`)
 		if name == "" {
 			continue
 		}
-		if commandClass(filepath.Base(name)) == "agent" {
-			return "agent"
+		if agentName := knownAgentName(filepath.Base(name)); agentName != "" {
+			return agentName
 		}
 	}
 	return ""

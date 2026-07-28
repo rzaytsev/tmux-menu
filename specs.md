@@ -126,13 +126,22 @@ Local shell titles like `user@workstation:~/project` are cleaned before
 display so the local machine name does not dominate the picker. Session rows do
 not show a working directory.
 
+Normal pane rows include `<window_name> | <pane_title>` when the window's
+`automatic-rename` option is disabled. Split panes repeat the manual window name
+and retain their distinct pane titles. Automatically renamed windows preserve
+the pane-title-only display, and identical window and cleaned pane titles are
+not duplicated. Agent rows and status detection continue to use pane/window
+titles independently of this normal-pane display rule.
+
 The picker uses ANSI colors through `fzf --ansi`:
 
 - row kinds: blue
 - session and project names: cyan + bold
 - ordinary pane commands: green
 - remote commands such as `mosh` and `ssh`: yellow
-- agent commands such as `codex`, `claude`, `opencode`, `aider`, `gemini`: magenta
+- Codex agent type labels: green
+- Claude agent type labels: orange
+- other agent type labels such as `opencode`, `aider`, and `gemini`: magenta
 - metadata: dim
 
 No Bubble Tea dependency is used for this. Use Bubble Tea only if the app needs
@@ -144,6 +153,10 @@ fzf cannot express cleanly.
 `agents` lists panes matched by command/title or descendant process (`codex`,
 `claude`, `opencode`, `aider`, `cursor-agent`, `gemini`). Selecting a row
 switches client, window, and pane.
+
+Each row starts with the detected agent type before the session/pane name. The
+foreground tmux command is omitted because agent launchers can expose generic
+values such as `node` or a version number instead of the product name.
 
 Agent rows include a status badge. Codex status comes from `#{pane_title}` or
 `#{window_name}` because process state is not a reliable wait/work signal for

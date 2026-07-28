@@ -44,6 +44,66 @@ func TestCleanPaneTitleDropsShortLocalHostPrefix(t *testing.T) {
 	}
 }
 
+func TestPaneLabelPreservesTitleWhenAutomaticRenameIsEnabled(t *testing.T) {
+	label := stripANSI(paneLabel(tmux.Pane{
+		SessionName:     "notes",
+		WindowName:      "notes-todo",
+		WindowIndex:     "2",
+		PaneIndex:       "1",
+		PaneTitle:       "todo.md",
+		CurrentCommand:  "nvim",
+		AutomaticRename: true,
+	}, ""))
+
+	if strings.Contains(label, "notes-todo |") || !strings.Contains(label, "  todo.md  ") {
+		t.Fatalf("automatic rename should preserve the existing pane label: %q", label)
+	}
+}
+
+func TestPaneLabelIncludesManualWindowName(t *testing.T) {
+	label := stripANSI(paneLabel(tmux.Pane{
+		SessionName:    "notes",
+		WindowName:     "notes-todo",
+		WindowIndex:    "2",
+		PaneIndex:      "1",
+		PaneTitle:      "todo.md",
+		CurrentCommand: "nvim",
+	}, ""))
+
+	if !strings.Contains(label, "notes-todo | todo.md") {
+		t.Fatalf("manual window name should prefix the pane title: %q", label)
+	}
+}
+
+func TestPaneLabelsRepeatManualWindowNameWithDistinctPaneTitles(t *testing.T) {
+	panes := []tmux.Pane{
+		{SessionName: "notes", WindowName: "notes-todo", WindowIndex: "2", PaneIndex: "1", PaneTitle: "todo.md", CurrentCommand: "nvim"},
+		{SessionName: "notes", WindowName: "notes-todo", WindowIndex: "2", PaneIndex: "2", PaneTitle: "shell", CurrentCommand: "zsh"},
+	}
+	items := paneItems(panes, "")
+	first := stripANSI(items[0].Label)
+	second := stripANSI(items[1].Label)
+
+	if !strings.Contains(first, "notes-todo | todo.md") || !strings.Contains(second, "notes-todo | shell") {
+		t.Fatalf("manual window name and distinct pane titles were not retained:\n%s\n%s", first, second)
+	}
+}
+
+func TestPaneLabelDoesNotDuplicateIdenticalManualWindowName(t *testing.T) {
+	label := stripANSI(paneLabel(tmux.Pane{
+		SessionName:    "notes",
+		WindowName:     "todo.md",
+		WindowIndex:    "2",
+		PaneIndex:      "1",
+		PaneTitle:      "todo.md",
+		CurrentCommand: "nvim",
+	}, ""))
+
+	if strings.Contains(label, "todo.md | todo.md") || strings.Count(label, "todo.md") != 1 {
+		t.Fatalf("identical window and pane titles should not be duplicated: %q", label)
+	}
+}
+
 func TestPaletteShowsSessionsAndPanesOnly(t *testing.T) {
 	panes := []tmux.Pane{
 		{SessionName: "work", SessionID: "$1", WindowIndex: "1", PaneIndex: "1", PaneID: "%1", CurrentCommand: "zsh"},
@@ -104,6 +164,7 @@ func TestAgentsShowsOnlyAgentPanesWithStatus(t *testing.T) {
 	items := agentItemsWithProcessSnapshot(panes, "", processSnapshot{
 		roots:    map[int]bool{1234: true},
 		statuses: map[int]agentStatus{1234: agentStatusWorking},
+		names:    map[int]string{1234: "codex"},
 	})
 	labels := make([]string, 0, len(items))
 	for _, item := range items {
@@ -112,9 +173,8 @@ func TestAgentsShowsOnlyAgentPanesWithStatus(t *testing.T) {
 	if len(labels) != 1 {
 		t.Fatalf("expected one agent label: %#v", labels)
 	}
-	if !strings.HasPrefix(labels[0], "agent") ||
+	if !strings.HasPrefix(labels[0], "codex") ||
 		!strings.Contains(labels[0], "work/1.2") ||
-		!strings.Contains(labels[0], "codex") ||
 		!strings.Contains(labels[0], "working") {
 		t.Fatalf("unexpected agent label: %q", labels[0])
 	}
@@ -213,6 +273,33 @@ func TestClaudePaneTitleStatusOverridesProcessStatus(t *testing.T) {
 	}
 }
 
+func TestManualWindowNamesDoNotChangeAgentRowsOrTitleStatuses(t *testing.T) {
+	codex := tmux.Pane{
+		SessionName: "work", WindowName: "manual-codex", WindowIndex: "1", PaneIndex: "1",
+		PaneID: "%1", PanePID: "100", PaneTitle: "tmux-menu|Working", CurrentCommand: "codex",
+	}
+	claude := tmux.Pane{
+		SessionName: "work", WindowName: "manual-claude", WindowIndex: "2", PaneIndex: "1",
+		PaneID: "%2", PanePID: "200", PaneTitle: "\u2733 Claude Code", CurrentCommand: "claude",
+	}
+	snapshot := processSnapshot{
+		roots: map[int]bool{100: true, 200: true},
+		statuses: map[int]agentStatus{
+			100: agentStatusWaiting,
+			200: agentStatusWorking,
+		},
+		names: map[int]string{100: "codex", 200: "claude"},
+	}
+	items := agentItemsWithProcessSnapshot([]tmux.Pane{codex, claude}, "", snapshot)
+
+	if got := stripANSI(items[0].Label); strings.Contains(got, "manual-codex") || !strings.Contains(got, "working") {
+		t.Fatalf("Codex agent row or title-derived status changed: %q", got)
+	}
+	if got := stripANSI(items[1].Label); strings.Contains(got, "manual-claude") || !strings.Contains(got, "waiting") {
+		t.Fatalf("Claude agent row or title-derived status changed: %q", got)
+	}
+}
+
 func TestSingleClaudeDotTitleDoesNotClaimWorking(t *testing.T) {
 	if got, ok := claudeStatusFromPaneTitle("\u2219 Claude Code"); ok {
 		t.Fatalf("single dot title should not be treated as working, got %q", got)
@@ -228,7 +315,7 @@ func TestAgentPaneLabelUsesCodexThreadTitle(t *testing.T) {
 		CurrentCommand: "codex",
 		PaneTitle:      "tmux-menu|add agents title |Working",
 		CurrentPath:    "/tmp/project",
-	}, "", agentStatusWorking))
+	}, "", agentStatusWorking, "codex"))
 
 	if !strings.Contains(label, "add agents title") {
 		t.Fatalf("label should include thread title: %q", label)
@@ -247,7 +334,7 @@ func TestAgentPaneLabelUsesCodexSpinnerThreadTitle(t *testing.T) {
 		CurrentCommand: "node",
 		PaneTitle:      "\u2826 019ea1db-72dc-79c2-8a11-72f1559360a0 | Working",
 		CurrentPath:    "/tmp/project",
-	}, "", agentStatusWorking))
+	}, "", agentStatusWorking, "codex"))
 
 	if !strings.Contains(label, "019ea1db-72dc-79c2-8a11-72f1559360a0") {
 		t.Fatalf("label should include Codex thread title: %q", label)
@@ -266,7 +353,7 @@ func TestAgentPaneLabelDoesNotUseCodexStateAsTitle(t *testing.T) {
 		CurrentCommand: "codex-aarch64-a",
 		PaneTitle:      "Ready",
 		CurrentPath:    "/home/alice/projects/tmux-menu",
-	}, "", agentStatusWaiting))
+	}, "", agentStatusWaiting, "codex"))
 
 	if strings.Contains(label, "Ready") {
 		t.Fatalf("label should not show Codex state as row title: %q", label)
@@ -304,6 +391,36 @@ func TestColorAgentStatusHighlightsAttention(t *testing.T) {
 	got := colorAgentStatus(agentStatusAttention)
 	if !strings.Contains(got, ansiRed) || !strings.Contains(got, ansiBold) {
 		t.Fatalf("attention status should be bold red, got %q", got)
+	}
+}
+
+func TestAgentRowsShowAgentNameBeforeSessionAndHideForegroundCommand(t *testing.T) {
+	panes := []tmux.Pane{
+		{SessionName: "work", WindowIndex: "1", PaneIndex: "1", PaneID: "%1", PanePID: "100", CurrentCommand: "node", PaneTitle: "|thread", CurrentPath: "/tmp/project"},
+		{SessionName: "work", WindowIndex: "2", PaneIndex: "1", PaneID: "%2", PanePID: "200", CurrentCommand: "2.1.217", PaneTitle: "\u00b7|\u00b7 Claude Code", CurrentPath: "/tmp/project"},
+	}
+	items := agentItemsWithProcessSnapshot(panes, "", processSnapshot{
+		roots:    map[int]bool{100: true, 200: true},
+		statuses: map[int]agentStatus{100: agentStatusWaiting, 200: agentStatusWorking},
+		names:    map[int]string{100: "codex", 200: "claude"},
+	})
+
+	if len(items) != 2 {
+		t.Fatalf("expected two agent rows, got %d", len(items))
+	}
+	codex := stripANSI(items[0].Label)
+	claude := stripANSI(items[1].Label)
+	if !strings.HasPrefix(codex, "codex  work/1.1") || strings.Contains(codex, "node") {
+		t.Fatalf("unexpected Codex row: %q", codex)
+	}
+	if !strings.HasPrefix(claude, "claude  work/2.1") || strings.Contains(claude, "2.1.217") {
+		t.Fatalf("unexpected Claude row: %q", claude)
+	}
+	if !strings.Contains(items[0].Label, ansiGreen) {
+		t.Fatalf("Codex name should be green: %q", items[0].Label)
+	}
+	if !strings.Contains(items[1].Label, ansiOrange) {
+		t.Fatalf("Claude name should be orange: %q", items[1].Label)
 	}
 }
 
@@ -1135,6 +1252,12 @@ func TestBuildProcessSnapshotMarksAgentRootsAndStatuses(t *testing.T) {
 	}
 	if snapshot.statuses[20] != agentStatusWorking || snapshot.statuses[21] != agentStatusWorking {
 		t.Fatalf("running claude tree should be working: %#v", snapshot.statuses)
+	}
+	if snapshot.names[10] != "codex" || snapshot.names[11] != "codex" {
+		t.Fatalf("codex name should propagate to its pane root: %#v", snapshot.names)
+	}
+	if snapshot.names[20] != "claude" || snapshot.names[21] != "claude" {
+		t.Fatalf("claude name should propagate to its pane root: %#v", snapshot.names)
 	}
 }
 
