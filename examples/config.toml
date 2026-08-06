@@ -3,8 +3,45 @@
 sections = ["sessions", "panes"]
 
 [picker]
-# Show helper lines above fzf results.
+# Show optional view-specific helper text.
 show_help = false
+# Width of right-side previews in agents and status.
+preview_width = "60%"
+# View order for Tab and Shift-Tab navigation.
+tab_order = ["palette", "agents", "tools", "projects", "status", "bookmarks"]
+
+[session]
+# All supported session-name colors:
+# default, black, red, green, yellow, blue, magenta, cyan, white, orange,
+# bright_black, bright_red, bright_green, bright_yellow, bright_blue,
+# bright_magenta, bright_cyan, bright_white.
+color = "cyan"
+
+[agents.icons]
+# Empty other uses the detected product name.
+codex = ">"
+claude = "✳"
+other = ""
+current = "*"
+branch = "├─"
+last_branch = "└─"
+attention = "!"
+working = "●"
+waiting = "○"
+unknown = "?"
+
+[agents.colors]
+# Supports session colors listed above plus dim.
+codex = "blue"
+claude = "orange"
+other = "magenta"
+branch = "dim"
+thread = "default"
+workdir = "dim"
+attention = "red"
+working = "green"
+waiting = "yellow"
+unknown = "dim"
 
 [projects]
 # Root directories scanned by the projects view.
@@ -67,6 +104,10 @@ command = "$EDITOR"
 width = "80%"
 height = "80%"
 border = "rounded"
+
+[links]
+# URL schemes extracted from pane scrollback. Local config replaces this list.
+url_schemes = ["http", "https", "slack", "tg"]
 
 [links.alternate]
 # Secondary opener used by Alt-Enter in the links view.

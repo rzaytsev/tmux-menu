@@ -16,13 +16,13 @@ Work directly and keep changes small. This is a local tmux utility, not a framew
 ## Current Behavior
 
 - `palette`: configured sections from `palette.sections`; default sessions, then panes. No window rows.
-- `agents`: dedicated agent-pane picker with status badges.
+- `agents`: dedicated agent-pane picker grouped as a tree by tmux session. Session headers use per-session colors and are display-only; selectable child rows show status, a Codex/Claude mark, thread name, and workdir without window/pane indexes or a leading `~/projects/`. The current agent thread name is prefixed with `*`.
 - `tools`: configured commands, dynamic Makefile targets from the session root/current dir, and quick dirs.
 - `projects`: lists one-level directories under `projects.roots`, creates/switches tmux sessions natively, and shows whether the configured bootstrap file exists.
-- `links`: captures origin pane scrollback, copies selected targets, opens file refs through configured `links.open`, opens URLs with `open`, and supports a configured alternate opener.
+- `links`: captures origin pane scrollback, extracts URL schemes configured by `links.url_schemes` (default HTTP, HTTPS, Slack, and Telegram), copies selected targets, opens file refs through configured `links.open`, opens URLs with `open`, and supports a configured alternate opener.
 - `bookmarks`: scans inline Markdown links from `bookmarks.dirs` in configured order, default `["~/notes/projects/{project}", "~/projects/{project}"]`, skips path parts matching `bookmarks.ignore_patterns` defaulting to `.git`, `.tmp`, and `vendor`, opens HTTP(S) links with `open`, and opens local file links in a right-side editor pane.
 - `status`: shows a task board from configured `status.status_dir` roots, default `["./todo"]`, and configured `status.statuses` subdirs, default `["new", "doing", "done"]`; rows show status, filename-derived title with `-`/`_` as spaces, and `summary: ...`, with Space toggling full preview and Enter opening the file in an editor split pane.
-- Picker views support `Alt-1` main, `Alt-2` agents, `Alt-3` tools, `Alt-4` projects, `Alt-5` status, `Alt-6` bookmarks through `fzf --expect`; the helper line is hidden unless `picker.show_help = true`.
+- Picker views support Tab/Shift-Tab through configured `picker.tab_order` and `Alt-1` main, `Alt-2` agents, `Alt-3` tools, `Alt-4` projects, `Alt-5` status, `Alt-6` bookmarks through `fzf --expect`; navigation shortcuts are always shown in a persistent footer, while `picker.show_help` controls optional view-specific help.
 - Global config path: `~/.tmux-menu.conf`; local `.tmux-menu.conf` overlays in the session root and origin pane directory can add commands/quick dirs or replace scalar/list settings.
 
 ## Implementation Rules
@@ -35,6 +35,8 @@ Work directly and keep changes small. This is a local tmux utility, not a framew
 - Codex agent status reads `#{pane_title}` and `#{window_name}` from Codex `tui.terminal_title`: status item `Ready` is yellow `waiting`, `Working` or `Thinking` is green `working`, `Action Required` is bold red `attention`; spinner-only title markers map braille/dot to `working` and empty marker before `|` to `waiting`.
 - Claude Code agent status reads leading `#{pane_title}` markers when present: star-like idle markers are yellow `waiting`, animated spinner markers are green `working`, explicit needs-input/permission text is bold red `attention`.
 - Other non-Codex agent status uses process state, not blocking output-delta polling: green `working`, yellow `waiting`, dim `unknown`.
+- Agent session-header colors come from `[session].color` in each tmux session root's `.tmux-menu.conf`; supported values cover terminal default, normal and bright ANSI colors, and orange.
+- Agent product, current-thread, tree, and status icons come from `[agents.icons]`; their colors plus thread/workdir colors come from `[agents.colors]`. Agent colors support the session color values plus `dim`; Codex defaults to blue.
 - Keep command modes explicit: `popup`, `paste`, `window`, `tmux`, `shell`.
 - Keep quick dirs separate from generic commands, but show commands, Makefile targets, and quick dirs only in `tools`.
 - `commands[].session` filters commands to a matching tmux session, same matching behavior as `quick_dirs[].session`.

@@ -28,7 +28,19 @@ func TestLoadMissingUsesDefaults(t *testing.T) {
 		t.Fatalf("unexpected palette sections: %#v", got)
 	}
 	if cfg.Picker.ShowHelp {
-		t.Fatal("picker helper line should be hidden by default")
+		t.Fatal("optional picker help should be disabled by default")
+	}
+	if cfg.Picker.PreviewWidth != "60%" {
+		t.Fatalf("unexpected picker preview width: %q", cfg.Picker.PreviewWidth)
+	}
+	if got := strings.Join(cfg.Picker.TabOrder, ","); got != "palette,agents,tools,projects,status,bookmarks" {
+		t.Fatalf("unexpected picker tab order: %q", got)
+	}
+	if cfg.Session.Color != DefaultSessionColor {
+		t.Fatalf("unexpected session color: %q", cfg.Session.Color)
+	}
+	if cfg.Agents.Icons.Codex != ">" || cfg.Agents.Icons.Claude != "✳" || cfg.Agents.Colors.Codex != "blue" {
+		t.Fatalf("unexpected agent presentation defaults: %#v", cfg.Agents)
 	}
 	if cfg.Projects.BootstrapFile != ".tmux-sessionizer" {
 		t.Fatalf("unexpected project bootstrap file: %q", cfg.Projects.BootstrapFile)
@@ -68,6 +80,9 @@ func TestLoadMissingUsesDefaults(t *testing.T) {
 		cfg.Links.Alternate.URLCommand != "open -a Safari" {
 		t.Fatalf("unexpected links alternate config: %#v", cfg.Links.Alternate)
 	}
+	if got := strings.Join(cfg.Links.URLSchemes, ","); got != "http,https,slack,tg" {
+		t.Fatalf("unexpected links URL schemes: %q", got)
+	}
 	if cfg.Links.Open.Mode != "popup" || cfg.Links.Open.PaneSide != "right" {
 		t.Fatalf("unexpected links open config: %#v", cfg.Links.Open)
 	}
@@ -87,6 +102,35 @@ sections = ["agents", "sessions", "panes"]
 
 [picker]
 show_help = true
+preview_width = "45%"
+tab_order = ["agents", "palette", "links"]
+
+[session]
+color = "magenta"
+
+[agents.icons]
+codex = "C"
+claude = "L"
+other = "A"
+current = "@"
+branch = "+-"
+last_branch = "\\-"
+attention = "A"
+working = "W"
+waiting = "I"
+unknown = "U"
+
+[agents.colors]
+codex = "bright_blue"
+claude = "bright_yellow"
+other = "bright_magenta"
+branch = "bright_black"
+thread = "bright_white"
+workdir = "white"
+attention = "bright_red"
+working = "bright_green"
+waiting = "yellow"
+unknown = "dim"
 
 [projects]
 roots = ["~/projects", "~/code"]
@@ -104,6 +148,9 @@ command = "vim"
 width = "85%"
 height = "75%"
 border = "rounded"
+
+[links]
+url_schemes = ["https", "slack", "mailto"]
 
 [links.alternate]
 key = "ctrl-o"
@@ -160,6 +207,18 @@ session = "work"
 	if !cfg.Picker.ShowHelp {
 		t.Fatal("picker.show_help should be loaded")
 	}
+	if cfg.Picker.PreviewWidth != "45%" {
+		t.Fatalf("picker.preview_width = %q", cfg.Picker.PreviewWidth)
+	}
+	if got := strings.Join(cfg.Picker.TabOrder, ","); got != "agents,palette,links" {
+		t.Fatalf("picker.tab_order = %q", got)
+	}
+	if cfg.Session.Color != "magenta" {
+		t.Fatalf("session.color = %q", cfg.Session.Color)
+	}
+	if cfg.Agents.Icons.Codex != "C" || cfg.Agents.Icons.LastBranch != "\\-" || cfg.Agents.Colors.Codex != "bright_blue" || cfg.Agents.Colors.Unknown != "dim" {
+		t.Fatalf("unexpected agents config: %#v", cfg.Agents)
+	}
 	if cfg.Projects.BootstrapFile != ".tmux-bootstrap" {
 		t.Fatalf("unexpected projects bootstrap file: %q", cfg.Projects.BootstrapFile)
 	}
@@ -173,6 +232,9 @@ session = "work"
 		cfg.Links.Alternate.FileCommand != "open -a Marked {}" ||
 		cfg.Links.Alternate.URLCommand != "open -a Firefox {}" {
 		t.Fatalf("unexpected links alternate config: %#v", cfg.Links.Alternate)
+	}
+	if got := strings.Join(cfg.Links.URLSchemes, ","); got != "https,slack,mailto" {
+		t.Fatalf("links URL schemes = %q", got)
 	}
 	if cfg.Links.Open.Mode != "window" || cfg.Links.Open.PaneSide != "left" {
 		t.Fatalf("unexpected links open config: %#v", cfg.Links.Open)
@@ -212,6 +274,12 @@ func TestLoadForContextOverlaysHomeSessionAndCurrentConfigs(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	if err := os.WriteFile(filepath.Join(home, ".tmux-menu.conf"), []byte(`
+[session]
+color = "cyan"
+
+[links]
+url_schemes = ["http", "https"]
+
 [status]
 status_dir = ["./todo"]
 preview_command = "glow"
@@ -227,6 +295,12 @@ cmd = "echo global"
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(sessionRoot, ".tmux-menu.conf"), []byte(`
+[session]
+color = "yellow"
+
+[links]
+url_schemes = ["slack", "tg"]
+
 [status]
 status_dir = ["./session-todo", "./docs"]
 statuses = ["backlog", "doing"]
@@ -260,6 +334,12 @@ cmd = "echo local"
 	}
 	if got := strings.Join(cfg.Status.StatusDirs, ","); got != "./session-todo,./docs" {
 		t.Fatalf("status dirs = %#v", cfg.Status.StatusDirs)
+	}
+	if cfg.Session.Color != "yellow" {
+		t.Fatalf("session color = %q", cfg.Session.Color)
+	}
+	if got := strings.Join(cfg.Links.URLSchemes, ","); got != "slack,tg" {
+		t.Fatalf("links URL schemes should be replaced by session config: %q", got)
 	}
 	if got := strings.Join(cfg.Status.Statuses, ","); got != "backlog,doing" {
 		t.Fatalf("statuses = %#v", cfg.Status.Statuses)
@@ -309,6 +389,12 @@ func TestExampleConfigKeepsDocumentedDefaultsInSync(t *testing.T) {
 	if !reflect.DeepEqual(cfg.Picker, def.Picker) {
 		t.Fatalf("example picker = %#v, want %#v", cfg.Picker, def.Picker)
 	}
+	if !reflect.DeepEqual(cfg.Session, def.Session) {
+		t.Fatalf("example session = %#v, want %#v", cfg.Session, def.Session)
+	}
+	if !reflect.DeepEqual(cfg.Agents, def.Agents) {
+		t.Fatalf("example agents = %#v, want %#v", cfg.Agents, def.Agents)
+	}
 	if !reflect.DeepEqual(cfg.Projects, def.Projects) {
 		t.Fatalf("example projects = %#v, want %#v", cfg.Projects, def.Projects)
 	}
@@ -345,6 +431,83 @@ func TestValidateRejectsBadPaletteSection(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsBadOrDuplicateTabMode(t *testing.T) {
+	for _, order := range [][]string{{"palette", "windows"}, {"agents", "agents"}} {
+		cfg := Default()
+		cfg.Picker.TabOrder = order
+		if err := Validate(cfg); err == nil {
+			t.Fatalf("expected invalid tab order %#v to fail", order)
+		}
+	}
+}
+
+func TestValidateRejectsBadSessionColor(t *testing.T) {
+	cfg := Default()
+	cfg.Session.Color = "ultraviolet"
+	if err := Validate(cfg); err == nil {
+		t.Fatal("expected invalid session color to fail")
+	}
+}
+
+func TestValidateAcceptsAllSessionColors(t *testing.T) {
+	for _, color := range strings.Split(SessionColorOptions, ", ") {
+		cfg := Default()
+		cfg.Session.Color = color
+		if err := Validate(cfg); err != nil {
+			t.Fatalf("session color %q should be valid: %v", color, err)
+		}
+	}
+}
+
+func TestValidateRejectsBadAgentPresentation(t *testing.T) {
+	cfg := Default()
+	cfg.Agents.Colors.Codex = "ultraviolet"
+	if err := Validate(cfg); err == nil || !strings.Contains(err.Error(), "agents.colors.codex") {
+		t.Fatalf("expected invalid Codex color error, got %v", err)
+	}
+
+	cfg = Default()
+	cfg.Agents.Icons.Current = "\n"
+	if err := Validate(cfg); err == nil || !strings.Contains(err.Error(), "agents.icons.current") {
+		t.Fatalf("expected invalid current icon error, got %v", err)
+	}
+}
+
+func TestValidateAcceptsAllAgentColors(t *testing.T) {
+	for _, color := range strings.Split(AgentColorOptions, ", ") {
+		cfg := Default()
+		cfg.Agents.Colors.Codex = color
+		if err := Validate(cfg); err != nil {
+			t.Fatalf("agent color %q should be valid: %v", color, err)
+		}
+	}
+}
+
+func TestValidateRejectsBadOrDuplicateURLScheme(t *testing.T) {
+	for _, schemes := range [][]string{{"https", "not a scheme"}, {"slack", "slack"}, {"1password"}} {
+		cfg := Default()
+		cfg.Links.URLSchemes = schemes
+		if err := Validate(cfg); err == nil {
+			t.Fatalf("expected invalid URL schemes %#v to fail", schemes)
+		}
+	}
+}
+
+func TestLoadNormalizesURLSchemes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[links]\nurl_schemes = [\" HTTPS \", \"Slack\"]\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(cfg.Links.URLSchemes, ","); got != "https,slack" {
+		t.Fatalf("normalized URL schemes = %q", got)
+	}
+}
+
 func TestSampleConfigIsToml(t *testing.T) {
 	got := Sample()
 	for _, want := range []string{
@@ -352,9 +515,21 @@ func TestSampleConfigIsToml(t *testing.T) {
 		`sections = ["sessions", "panes"]`,
 		"[picker]",
 		"show_help = false",
+		`tab_order = ["palette", "agents", "tools", "projects", "status", "bookmarks"]`,
+		"[session]",
+		`color = "cyan"`,
+		"bright_green",
+		"[agents.icons]",
+		`codex = ">"`,
+		`current = "*"`,
+		"[agents.colors]",
+		`codex = "blue"`,
+		`unknown = "dim"`,
 		"[projects]",
 		`roots = ["~/projects"]`,
 		`bootstrap_file = ".tmux-sessionizer"`,
+		"[links]",
+		`url_schemes = ["http", "https", "slack", "tg"]`,
 		"[links.alternate]",
 		`key = "alt-enter"`,
 		`file_command = "open -a TextEdit"`,
@@ -409,7 +584,7 @@ func TestValidateRejectsBadOpenConfig(t *testing.T) {
 }
 
 func TestValidateRejectsReservedAlternateKeys(t *testing.T) {
-	for _, key := range []string{"enter", "alt-1", "alt-2", "alt-3", "alt-4", "alt-5", "alt-6", "ctrl-o,alt-o", "ctrl o"} {
+	for _, key := range []string{"enter", "tab", "btab", "alt-1", "alt-2", "alt-3", "alt-4", "alt-5", "alt-6", "ctrl-o,alt-o", "ctrl o"} {
 		t.Run(key, func(t *testing.T) {
 			cfg := Default()
 			cfg.Links.Alternate.Key = key

@@ -19,7 +19,7 @@ func selectTools(ctx context.Context) (picker.Result[menuItem], error) {
 		return picker.Result[menuItem]{}, err
 	}
 	items := toolsItems(cfg, rt.OriginPath, rt.SessionName, rt.SessionPath)
-	return picker.SelectWithExpect(ctx, "tools> ", items, viewSwitchKeys, viewSwitchHeaderForConfig(cfg))
+	return picker.SelectWithExpect(ctx, "tools> ", items, viewSwitchKeys, viewSwitchFooter())
 }
 
 func toolsItems(cfg config.Config, originPath, sessionName, sessionPath string) []picker.Item[menuItem] {

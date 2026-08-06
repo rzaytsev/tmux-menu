@@ -6,6 +6,18 @@ Small Go command palette for tmux.
 panes, agent panes, project directories, links, bookmarks, tools, and task
 files without leaving the keyboard.
 Manually named tmux windows are shown alongside each pane's own title.
+The agents picker groups panes under display-only session headers and previews
+the selected pane's latest scrollback lines, with popup and preview sizing
+controlled by the shared config. Selectable tree rows show a compact status
+sign, a blue Codex `>` or orange Claude `✳` mark, thread name, and compact
+workdir with the common `~/projects/` prefix omitted. Agent marks, tree/status
+icons, and their colors are configurable through `[agents.icons]` and
+`[agents.colors]`.
+Each session-root `.tmux-menu.conf` can set its header `[session].color`.
+Tab and Shift-Tab cycle through a configurable picker order, while a persistent
+footer shows those controls and the direct Alt-number shortcuts.
+The links picker recognizes configurable URL schemes, including HTTP(S), Slack,
+and Telegram deep links by default.
 
 ## Requirements
 

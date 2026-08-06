@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
 	"strconv"
 	"strings"
 
 	"tmux-menu/internal/action"
+	"tmux-menu/internal/config"
 	"tmux-menu/internal/picker"
 	"tmux-menu/internal/tmux"
 )
@@ -18,6 +20,7 @@ const (
 	agentStatusWaiting   agentStatus = "waiting"
 	agentStatusWorking   agentStatus = "working"
 	agentStatusUnknown   agentStatus = "unknown"
+	agentPreviewCommand              = "test -n {} && tmux capture-pane -e -p -S -300 -t {}"
 )
 
 func selectAgents(ctx context.Context) (picker.Result[menuItem], error) {
@@ -29,25 +32,117 @@ func selectAgents(ctx context.Context) (picker.Result[menuItem], error) {
 	if err != nil {
 		return picker.Result[menuItem]{}, err
 	}
-	items := agentItems(panes, rt.OriginPane)
-	return picker.SelectWithExpect(ctx, "agents> ", items, viewSwitchKeys, viewSwitchHeaderForConfig(cfg))
+	snapshot := loadAgentProcessSnapshot(panes)
+	sessionColors, err := loadAgentSessionColors(agentPanesWithProcessSnapshot(panes, snapshot), cfg.Session.Color)
+	if err != nil {
+		return picker.Result[menuItem]{}, err
+	}
+	items := agentTreeItemsWithProcessSnapshotAndSessionColors(panes, rt.OriginPane, snapshot, sessionColors, cfg.Agents)
+	return picker.SelectWithExpectAndPreviewOptions(ctx, "agents> ", items, viewSwitchKeys, viewSwitchFooter(), agentPreviewCommand, picker.Options{
+		PreviewWindow: pickerPreviewWindow(cfg.Picker.PreviewWidth, "wrap", "follow"),
+		Bindings:      []string{"start:down"},
+	})
 }
 
 func agentItems(panes []tmux.Pane, currentPaneID string) []picker.Item[menuItem] {
+	return agentItemsWithSessionColors(panes, currentPaneID, nil)
+}
+
+func agentItemsWithSessionColors(panes []tmux.Pane, currentPaneID string, sessionColors map[string]string) []picker.Item[menuItem] {
 	snapshot := loadAgentProcessSnapshot(panes)
-	return agentItemsWithProcessSnapshot(panes, currentPaneID, snapshot)
+	return agentItemsWithProcessSnapshotAndSessionColors(panes, currentPaneID, snapshot, sessionColors)
 }
 
 func agentItemsWithProcessSnapshot(panes []tmux.Pane, currentPaneID string, snapshot processSnapshot) []picker.Item[menuItem] {
+	return agentItemsWithProcessSnapshotAndSessionColors(panes, currentPaneID, snapshot, nil)
+}
+
+func agentItemsWithProcessSnapshotAndSessionColors(panes []tmux.Pane, currentPaneID string, snapshot processSnapshot, sessionColors map[string]string) []picker.Item[menuItem] {
+	return agentItemsWithProcessSnapshotAndSessionColorsAndConfig(panes, currentPaneID, snapshot, sessionColors, config.Default().Agents)
+}
+
+func agentItemsWithProcessSnapshotAndSessionColorsAndConfig(panes []tmux.Pane, currentPaneID string, snapshot processSnapshot, sessionColors map[string]string, agentsConfig config.AgentsConfig) []picker.Item[menuItem] {
 	agents := agentPanesWithProcessSnapshot(panes, snapshot)
 	items := make([]picker.Item[menuItem], 0, len(agents))
 	for _, p := range agents {
 		items = append(items, picker.Item[menuItem]{
-			Label: agentPaneLabel(p, currentPaneID, agentPaneStatus(p, snapshot), agentPaneName(p, snapshot)),
-			Value: menuItem{dispatch: action.SwitchPane(p)},
+			Label:   agentPaneLabelWithConfig(p, currentPaneID, agentPaneStatus(p, snapshot), agentPaneName(p, snapshot), sessionColorForPane(p, sessionColors), agentsConfig),
+			Preview: p.PaneID,
+			Value:   menuItem{dispatch: action.SwitchPane(p)},
 		})
 	}
 	return items
+}
+
+func agentTreeItemsWithProcessSnapshotAndSessionColors(panes []tmux.Pane, currentPaneID string, snapshot processSnapshot, sessionColors map[string]string, agentsConfig config.AgentsConfig) []picker.Item[menuItem] {
+	type sessionGroup struct {
+		session tmux.Pane
+		panes   []tmux.Pane
+	}
+
+	agents := agentPanesWithProcessSnapshot(panes, snapshot)
+	groups := make([]sessionGroup, 0)
+	groupIndexes := make(map[string]int)
+	for _, p := range agents {
+		key := paneSessionKey(p)
+		index, ok := groupIndexes[key]
+		if !ok {
+			index = len(groups)
+			groupIndexes[key] = index
+			groups = append(groups, sessionGroup{session: p})
+		}
+		groups[index].panes = append(groups[index].panes, p)
+	}
+
+	items := make([]picker.Item[menuItem], 0, len(agents)+len(groups))
+	for _, group := range groups {
+		items = append(items, picker.Item[menuItem]{
+			Label:    agentSessionLabel(group.session, sessionColorForPane(group.session, sessionColors)),
+			Disabled: true,
+		})
+		for i, p := range group.panes {
+			items = append(items, picker.Item[menuItem]{
+				Label:   agentTreePaneLabelWithConfig(p, currentPaneID, agentPaneStatus(p, snapshot), agentPaneName(p, snapshot), i == len(group.panes)-1, agentsConfig),
+				Preview: p.PaneID,
+				Value:   menuItem{dispatch: action.SwitchPane(p)},
+			})
+		}
+	}
+	return items
+}
+
+func loadAgentSessionColors(panes []tmux.Pane, fallback string) (map[string]string, error) {
+	colors := make(map[string]string)
+	for _, p := range panes {
+		key := paneSessionKey(p)
+		if _, ok := colors[key]; ok {
+			continue
+		}
+		color := fallback
+		if p.SessionPath != "" {
+			cfg, err := config.LoadForContext(p.SessionPath, p.SessionPath)
+			if err != nil {
+				return nil, fmt.Errorf("load config for session %q: %w", p.SessionName, err)
+			}
+			color = cfg.Session.Color
+		}
+		colors[key] = color
+	}
+	return colors, nil
+}
+
+func sessionColorForPane(p tmux.Pane, colors map[string]string) string {
+	if color := colors[paneSessionKey(p)]; color != "" {
+		return color
+	}
+	return config.DefaultSessionColor
+}
+
+func paneSessionKey(p tmux.Pane) string {
+	if p.SessionID != "" {
+		return p.SessionID
+	}
+	return p.SessionName
 }
 
 func agentPanes(panes []tmux.Pane) []tmux.Pane {

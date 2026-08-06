@@ -17,8 +17,24 @@ func selectPalette(ctx context.Context) (picker.Result[menuItem], error) {
 	if err != nil {
 		return picker.Result[menuItem]{}, err
 	}
-	items := paletteItems(panes, rt.SessionID, rt.OriginPane, cfg.Palette.Sections)
-	return picker.SelectWithExpect(ctx, "tmux-menu> ", items, viewSwitchKeys, viewSwitchHeaderForConfig(cfg))
+	var agentRows []picker.Item[menuItem]
+	for _, section := range cfg.Palette.Sections {
+		if section != "agents" {
+			continue
+		}
+		snapshot := loadAgentProcessSnapshot(panes)
+		agents := agentPanesWithProcessSnapshot(panes, snapshot)
+		sessionColors, err := loadAgentSessionColors(agents, cfg.Session.Color)
+		if err != nil {
+			return picker.Result[menuItem]{}, err
+		}
+		agentRows = agentItemsWithProcessSnapshotAndSessionColorsAndConfig(panes, rt.OriginPane, snapshot, sessionColors, cfg.Agents)
+		break
+	}
+	items := paletteItemsWithAgentSource(panes, rt.SessionID, rt.OriginPane, cfg.Palette.Sections, func() []picker.Item[menuItem] {
+		return agentRows
+	})
+	return picker.SelectWithExpect(ctx, "tmux-menu> ", items, viewSwitchKeys, viewSwitchFooter())
 }
 
 func paletteItems(panes []tmux.Pane, currentSessionID string, currentPaneID string, sections []string) []picker.Item[menuItem] {

@@ -33,6 +33,42 @@ func TestParseFZFOutputWithExpectedKeyAndNoSelection(t *testing.T) {
 	}
 }
 
+func TestParseFZFOutputWithExpectedKeyAndEmptyPlaceholder(t *testing.T) {
+	got, err := parseFZFOutput[string]("tab\n-1\tNo items\n", nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Key != "tab" || got.Selected {
+		t.Fatalf("unexpected empty picker navigation result: %#v", got)
+	}
+}
+
+func TestParseFZFOutputTreatsEmptyPlaceholderEnterAsCanceled(t *testing.T) {
+	_, err := parseFZFOutput[string]("\n-1\tNo items\n", nil, true)
+	if !errors.Is(err, ErrCanceled) {
+		t.Fatalf("empty placeholder Enter should cancel, got: %v", err)
+	}
+}
+
+func TestParseFZFOutputTreatsDisabledItemAsCanceled(t *testing.T) {
+	items := []Item[string]{{Label: "session", Disabled: true}}
+	_, err := parseFZFOutput("\n0\tsession\n", items, true)
+	if !errors.Is(err, ErrCanceled) {
+		t.Fatalf("disabled item Enter should cancel, got: %v", err)
+	}
+}
+
+func TestParseFZFOutputKeepsExpectedKeyFromDisabledItem(t *testing.T) {
+	items := []Item[string]{{Label: "session", Disabled: true}}
+	got, err := parseFZFOutput("tab\n0\tsession\n", items, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Key != "tab" || got.Selected {
+		t.Fatalf("unexpected disabled-item navigation result: %#v", got)
+	}
+}
+
 func TestParseFZFOutputWithExpectedSelection(t *testing.T) {
 	items := []Item[string]{{Label: "one", Value: "selected"}}
 	got, err := parseFZFOutput("\n0\tone\n", items, true)
@@ -50,6 +86,7 @@ func TestBuildFZFArgsAddsPreviewForHiddenPreviewField(t *testing.T) {
 	for _, want := range []string{
 		"--delimiter\n\t",
 		"--with-nth\n3..",
+		"--footer\nAlt-1 main",
 		"--preview\nglow {2}",
 	} {
 		if !strings.Contains(got, want) {
@@ -83,6 +120,18 @@ func TestSelectWithExpectReturnsMissingFZFError(t *testing.T) {
 	}
 	if errors.Is(err, ErrCanceled) {
 		t.Fatalf("missing fzf should not be treated as cancellation: %v", err)
+	}
+}
+
+func TestSelectWithExpectKeepsEmptyPickerNavigable(t *testing.T) {
+	writeFakeFZF(t, "cat >/dev/null\nprintf 'tab\\n-1\\tNo items\\n'\n")
+
+	got, err := SelectWithExpect[string](context.Background(), "test> ", nil, []string{"tab"}, "Tab:Next")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Key != "tab" || got.Selected {
+		t.Fatalf("unexpected empty picker result: %#v", got)
 	}
 }
 

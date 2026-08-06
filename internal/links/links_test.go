@@ -6,6 +6,8 @@ import (
 	"testing"
 )
 
+var defaultURLSchemes = []string{"http", "https", "slack", "tg"}
+
 func TestExtractURLsAndExistingFileRefs(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "cmd", "main.go"))
@@ -16,7 +18,7 @@ panic at cmd/main.go:12:3:
 open ./README.md:5 for notes
 ignore missing.go:9`
 
-	items := Extract(scrollback, dir)
+	items := Extract(scrollback, dir, defaultURLSchemes)
 	if len(items) != 3 {
 		t.Fatalf("expected 3 items, got %#v", items)
 	}
@@ -36,11 +38,40 @@ ignore missing.go:9`
 	}
 }
 
+func TestExtractUsesConfiguredURLSchemes(t *testing.T) {
+	scrollback := `web https://example.com
+Slack slack://channel?team=T123&id=C456.
+Telegram TG://resolve?domain=example)
+email mailto:user@example.com
+ignored ftp://example.com`
+
+	items := Extract(scrollback, "", []string{"slack", "tg", "mailto"})
+	if len(items) != 3 {
+		t.Fatalf("expected 3 configured URLs, got %#v", items)
+	}
+	for i, want := range []string{
+		"slack://channel?team=T123&id=C456",
+		"TG://resolve?domain=example",
+		"mailto:user@example.com",
+	} {
+		if items[i].Kind != KindURL || items[i].Target != want {
+			t.Fatalf("item %d = %#v, want URL %q", i, items[i], want)
+		}
+	}
+}
+
+func TestExtractDoesNotMatchSchemeInsideAnotherScheme(t *testing.T) {
+	items := Extract("fooslack://channel?team=T123&id=C456", "", []string{"slack"})
+	if len(items) != 0 {
+		t.Fatalf("expected no partial scheme match, got %#v", items)
+	}
+}
+
 func TestExtractDeduplicatesFileRefs(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "main.go"))
 
-	items := Extract("main.go:1\nmain.go:1\nmain.go:2", dir)
+	items := Extract("main.go:1\nmain.go:1\nmain.go:2", dir, defaultURLSchemes)
 	if len(items) != 2 {
 		t.Fatalf("expected 2 unique file refs, got %#v", items)
 	}
@@ -50,7 +81,7 @@ func TestExtractFileRangeUsesStartLine(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "internal", "config", "config.go"))
 
-	items := Extract("see internal/config/config.go:33-55", dir)
+	items := Extract("see internal/config/config.go:33-55", dir, defaultURLSchemes)
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item, got %#v", items)
 	}
@@ -66,7 +97,7 @@ func TestExtractFileLineBeforeTrailingDash(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "internal", "config", "config.go"))
 
-	items := Extract("see internal/config/config.go:13 - config", dir)
+	items := Extract("see internal/config/config.go:13 - config", dir, defaultURLSchemes)
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item, got %#v", items)
 	}
@@ -79,7 +110,7 @@ func TestExtractFileRefBeforeTrailingPeriod(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "docs", "livekit-room-chat-plan.md"))
 
-	items := Extract("Saved the plan to docs/livekit-room-chat-plan.md. I also linked it.", dir)
+	items := Extract("Saved the plan to docs/livekit-room-chat-plan.md. I also linked it.", dir, defaultURLSchemes)
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item, got %#v", items)
 	}
@@ -92,7 +123,7 @@ func TestExtractFileLineBeforeTrailingPeriod(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "README.md"))
 
-	items := Extract("linked from root README.md:20.", dir)
+	items := Extract("linked from root README.md:20.", dir, defaultURLSchemes)
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item, got %#v", items)
 	}

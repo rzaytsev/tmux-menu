@@ -41,6 +41,8 @@ tmux-menu sample-config
 
 Inside `fzf` picker views:
 
+- `Tab`: next configured view.
+- `Shift-Tab`: previous configured view.
 - `Alt-1`: main palette
 - `Alt-2`: agents
 - `Alt-3`: tools
@@ -51,8 +53,13 @@ Inside `fzf` picker views:
 In the links view, `Alt-Enter` opens the selected row with the configured
 secondary opener.
 
-The helper line that lists these shortcuts is controlled by
-`picker.show_help` and is hidden by default.
+The shortcuts are shown in a persistent footer at the bottom of every picker.
+`picker.tab_order` controls the Tab cycle and defaults to palette, agents,
+tools, projects, status, then bookmarks. Configured values may also include
+links. Cycling wraps at both ends; a view omitted from the order enters at the
+first item with Tab or the last item with Shift-Tab.
+Empty views contain a non-selectable `No items` row so navigation keys continue
+to work; Enter on that row cancels the picker.
 
 Recommended tmux bindings:
 
@@ -136,12 +143,15 @@ titles independently of this normal-pane display rule.
 The picker uses ANSI colors through `fzf --ansi`:
 
 - row kinds: blue
-- session and project names: cyan + bold
+- palette session and project names: cyan + bold
+- agent-tree session headers: bold, using that session root's configured
+  `[session].color` (cyan by default); named options cover terminal default,
+  the normal and bright ANSI palettes, and orange
 - ordinary pane commands: green
 - remote commands such as `mosh` and `ssh`: yellow
-- Codex agent type labels: green
-- Claude agent type labels: orange
-- other agent type labels such as `opencode`, `aider`, and `gemini`: magenta
+- agent product, status, tree, thread, and workdir colors: configured through
+  `[agents.colors]`; defaults are blue Codex, orange Claude, magenta other,
+  green working, yellow waiting, red attention, and dim unknown/tree/workdir
 - metadata: dim
 
 No Bubble Tea dependency is used for this. Use Bubble Tea only if the app needs
@@ -154,11 +164,28 @@ fzf cannot express cleanly.
 `claude`, `opencode`, `aider`, `cursor-agent`, `gemini`). Selecting a row
 switches client, window, and pane.
 
-Each row starts with the detected agent type before the session/pane name. The
-foreground tmux command is omitted because agent launchers can expose generic
-values such as `node` or a version number instead of the product name.
+The dedicated picker groups agents as a tree under tmux session headers.
+Session headers are display-only, omit window and pane indexes, and use the
+`[session].color` loaded from that tmux session's root `.tmux-menu.conf`.
+Selectable child rows show the tree branch, status sign, product mark, thread
+name, and workdir. By default Codex uses a blue `>`, Claude uses an orange `✳`,
+and other detected agents retain their product name. `[agents.icons]` configures
+all product, current-thread, tree, and status symbols; `[agents.colors]`
+configures all non-session colors. The foreground tmux command
+is omitted because launchers can expose generic values such as `node` or a
+version number instead of the product name. Displayed workdirs omit a leading
+`~/projects/`. The first agent row is selected when the picker opens; selecting
+a session header does not dispatch an action.
 
-Agent rows include a status badge. Codex status comes from `#{pane_title}` or
+The current agent thread is marked by prefixing its thread name with `*` without
+a space. Canonical UUID-shaped agent titles and tmux session names are shortened
+to their first segment. The picker shows recent
+scrollback from the selected pane in a visible right-side preview and follows
+its latest lines. `picker.preview_width` controls the preview split for this
+and every other preview-enabled picker. Agent entries embedded in the optional
+main-palette `agents` section keep the compact flat row layout.
+
+Agent rows start with a status sign. Codex status comes from `#{pane_title}` or
 `#{window_name}` because process state is not a reliable wait/work signal for
 Codex. Codex exposes terminal title items through `tui.terminal_title` and
 `/title`; accepted title shapes include `Ready`, `Working`, `Thinking`,
@@ -168,21 +195,21 @@ Codex. Codex exposes terminal title items through `tui.terminal_title` and
 When the title is only a run state, the row title falls back to the pane
 directory name.
 
-- bold red `attention`: final state is `Action Required`
-- green `working`: final state is `Working` or `Thinking`
-- yellow `waiting`: final state is `Ready`
-- green `working`: spinner-only title has a leading braille/dot marker
-- yellow `waiting`: spinner-only title has an empty marker before `|`
+- bold red `!` (`attention`): final state is `Action Required`
+- green `●` (`working`): final state is `Working` or `Thinking`
+- yellow `○` (`waiting`): final state is `Ready`
+- green `●` (`working`): spinner-only title has a leading braille/dot marker
+- yellow `○` (`waiting`): spinner-only title has an empty marker before `|`
 
 Claude Code status comes from the leading `#{pane_title}` marker when present:
-star-like idle markers are yellow `waiting`, animated spinner markers are green
-`working`, and explicit needs-input/permission text is bold red `attention`.
+star-like idle markers show yellow `○`, animated spinner markers show green
+`●`, and explicit needs-input/permission text shows bold red `!`.
 
 Other agents use process state:
 
-- green `working`: an agent process in the pane tree is running
-- yellow `waiting`: the agent process is present but sleeping
-- dim `unknown`: process state is unavailable
+- green `●` (`working`): an agent process in the pane tree is running
+- yellow `○` (`waiting`): the agent process is present but sleeping
+- dim `?` (`unknown`): process state is unavailable
 
 ## Tools Mode
 
@@ -242,7 +269,9 @@ an error instead of hanging indefinitely.
 
 `links` captures the active/origin pane scrollback and extracts:
 
-- `http://` and `https://` URLs
+- URLs whose scheme appears in `links.url_schemes`, defaulting to `http`,
+  `https`, `slack`, and `tg`; configured scheme names are case-insensitive and
+  local config replaces the inherited list
 - absolute file paths with optional `:line`, `:line:column`, or `:start-end`
 - relative file paths with optional `:line`, `:line:column`, or `:start-end`,
   resolved from the origin pane directory
@@ -324,7 +353,7 @@ The picker uses `fzf --preview`, hidden by default with `Space` bound to toggle
 the full preview. The preview command comes from `status.preview_command`,
 defaulting to `glow`. If the configured command contains `{}`, that placeholder
 is replaced with the hidden selected file path; otherwise the selected file path
-is appended.
+is appended. The right-side split uses the shared `picker.preview_width`.
 
 Selecting a status row opens the selected file with the configured editor using
 `status.open`, started from the tmux session root. The default is a tmux pane
@@ -350,6 +379,24 @@ sections = ["sessions", "panes"]
 
 [picker]
 show_help = false
+preview_width = "60%"
+tab_order = ["palette", "agents", "tools", "projects", "status", "bookmarks"]
+
+[session]
+color = "cyan"
+
+[agents.icons]
+codex = ">"
+claude = "✳"
+current = "*"
+working = "●"
+waiting = "○"
+
+[agents.colors]
+codex = "blue"
+claude = "orange"
+working = "green"
+waiting = "yellow"
 
 [projects]
 roots = ["~/projects"]
@@ -380,6 +427,9 @@ command = "$EDITOR"
 width = "80%"
 height = "80%"
 border = "rounded"
+
+[links]
+url_schemes = ["http", "https", "slack", "tg"]
 
 [links.open]
 mode = "popup"

@@ -11,9 +11,10 @@ import (
 )
 
 type Item[T any] struct {
-	Label   string
-	Preview string
-	Value   T
+	Label    string
+	Preview  string
+	Disabled bool
+	Value    T
 }
 
 type Result[T any] struct {
@@ -29,6 +30,8 @@ type Options struct {
 
 var ErrCanceled = errors.New("selection canceled")
 
+const emptyItemID = -1
+
 func Select[T any](ctx context.Context, prompt string, items []Item[T]) (T, error) {
 	result, err := SelectWithExpect(ctx, prompt, items, nil, "")
 	if err != nil {
@@ -42,20 +45,27 @@ func Select[T any](ctx context.Context, prompt string, items []Item[T]) (T, erro
 	return result.Value, nil
 }
 
-func SelectWithExpect[T any](ctx context.Context, prompt string, items []Item[T], expectKeys []string, header string) (Result[T], error) {
-	return SelectWithExpectAndPreview(ctx, prompt, items, expectKeys, header, "")
+func SelectWithExpect[T any](ctx context.Context, prompt string, items []Item[T], expectKeys []string, footer string) (Result[T], error) {
+	return SelectWithExpectAndPreview(ctx, prompt, items, expectKeys, footer, "")
 }
 
-func SelectWithExpectAndPreview[T any](ctx context.Context, prompt string, items []Item[T], expectKeys []string, header string, previewCommand string) (Result[T], error) {
-	return SelectWithExpectAndPreviewOptions(ctx, prompt, items, expectKeys, header, previewCommand, Options{})
+func SelectWithExpectAndPreview[T any](ctx context.Context, prompt string, items []Item[T], expectKeys []string, footer string, previewCommand string) (Result[T], error) {
+	return SelectWithExpectAndPreviewOptions(ctx, prompt, items, expectKeys, footer, previewCommand, Options{})
 }
 
-func SelectWithExpectAndPreviewOptions[T any](ctx context.Context, prompt string, items []Item[T], expectKeys []string, header string, previewCommand string, options Options) (Result[T], error) {
+func SelectWithExpectAndPreviewOptions[T any](ctx context.Context, prompt string, items []Item[T], expectKeys []string, footer string, previewCommand string, options Options) (Result[T], error) {
 	if len(items) == 0 && len(expectKeys) == 0 {
 		return Result[T]{}, ErrCanceled
 	}
 	lines := make([]string, 0, len(items))
 	hasPreview := strings.TrimSpace(previewCommand) != ""
+	if len(items) == 0 {
+		if hasPreview {
+			lines = append(lines, fmt.Sprintf("%d\t\tNo items", emptyItemID))
+		} else {
+			lines = append(lines, fmt.Sprintf("%d\tNo items", emptyItemID))
+		}
+	}
 	for i, item := range items {
 		if hasPreview {
 			lines = append(lines, fmt.Sprintf("%d\t%s\t%s", i, item.Preview, item.Label))
@@ -63,7 +73,7 @@ func SelectWithExpectAndPreviewOptions[T any](ctx context.Context, prompt string
 		}
 		lines = append(lines, fmt.Sprintf("%d\t%s", i, item.Label))
 	}
-	args := buildFZFArgs(prompt, expectKeys, header, previewCommand, options)
+	args := buildFZFArgs(prompt, expectKeys, footer, previewCommand, options)
 	cmd := exec.CommandContext(ctx, "fzf", args...)
 	cmd.Stdin = strings.NewReader(strings.Join(lines, "\n"))
 	var stderr bytes.Buffer
@@ -91,7 +101,7 @@ func classifyFZFError(err error, stderr string) error {
 	return fmt.Errorf("run fzf: %w", err)
 }
 
-func buildFZFArgs(prompt string, expectKeys []string, header string, previewCommand string, options Options) []string {
+func buildFZFArgs(prompt string, expectKeys []string, footer string, previewCommand string, options Options) []string {
 	hasPreview := strings.TrimSpace(previewCommand) != ""
 	withNth := "2.."
 	if hasPreview {
@@ -108,8 +118,8 @@ func buildFZFArgs(prompt string, expectKeys []string, header string, previewComm
 	if len(expectKeys) > 0 {
 		args = append(args, "--expect="+strings.Join(expectKeys, ","))
 	}
-	if header != "" {
-		args = append(args, "--header", header)
+	if footer != "" {
+		args = append(args, "--footer", footer)
 	}
 	if hasPreview {
 		args = append(args, "--preview", previewCommandForField(previewCommand, "{2}"))
@@ -157,8 +167,20 @@ func parseFZFOutput[T any](out string, items []Item[T], expect bool) (Result[T],
 		return Result[T]{}, fmt.Errorf("bad fzf output %q", selected)
 	}
 	id, err := strconv.Atoi(idText)
+	if err == nil && id == emptyItemID {
+		if key != "" {
+			return Result[T]{Key: key}, nil
+		}
+		return Result[T]{}, ErrCanceled
+	}
 	if err != nil || id < 0 || id >= len(items) {
 		return Result[T]{}, fmt.Errorf("bad fzf item id %q", idText)
+	}
+	if items[id].Disabled {
+		if key != "" {
+			return Result[T]{Key: key}, nil
+		}
+		return Result[T]{}, ErrCanceled
 	}
 	return Result[T]{Key: key, Value: items[id].Value, Selected: true}, nil
 }

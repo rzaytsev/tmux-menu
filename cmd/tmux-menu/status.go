@@ -27,13 +27,13 @@ func selectStatus(ctx context.Context) (picker.Result[menuItem], error) {
 	if err != nil {
 		return picker.Result[menuItem]{}, err
 	}
-	return picker.SelectWithExpectAndPreviewOptions(ctx, "status> ", items, viewSwitchKeys, statusHeader(cfg), cfg.Status.PreviewCommand, picker.Options{
-		PreviewWindow: "right:60%:hidden:wrap",
+	return picker.SelectWithExpectAndPreviewOptions(ctx, "status> ", items, viewSwitchKeys, statusFooter(cfg), cfg.Status.PreviewCommand, picker.Options{
+		PreviewWindow: pickerPreviewWindow(cfg.Picker.PreviewWidth, "hidden", "wrap"),
 		Bindings:      []string{"space:toggle-preview"},
 	})
 }
 
-func statusHeader(cfg config.Config) string {
+func statusFooter(cfg config.Config) string {
 	statuses := make([]string, 0, len(cfg.Status.Statuses))
 	for _, status := range cfg.Status.Statuses {
 		status = strings.TrimSpace(status)
@@ -42,15 +42,13 @@ func statusHeader(cfg config.Config) string {
 		}
 		statuses = append(statuses, strings.ToUpper(status))
 	}
-	header := strings.Join(statuses, " / ")
-	if header != "" {
-		header += " | "
+	footer := strings.Join(statuses, " / ")
+	if footer != "" {
+		footer += " | "
 	}
-	header += "Space preview | Enter edit | Ctrl-C cancel"
-	if switchHelp := viewSwitchHeaderForConfig(cfg); switchHelp != "" {
-		header += " | " + switchHelp
-	}
-	return header
+	footer += "Space preview | Enter edit | Ctrl-C cancel"
+	footer += "\n" + viewSwitchFooter()
+	return footer
 }
 
 func statusItems(cfg config.StatusConfig, editor config.EditorConfig, sessionRoot string) ([]picker.Item[menuItem], error) {

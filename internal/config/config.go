@@ -13,10 +13,15 @@ import (
 
 const appName = "tmux-menu"
 const configFileName = ".tmux-menu.conf"
+const DefaultSessionColor = "cyan"
+const SessionColorOptions = "default, black, red, green, yellow, blue, magenta, cyan, white, bright_black, bright_red, bright_green, bright_yellow, bright_blue, bright_magenta, bright_cyan, bright_white, orange"
+const AgentColorOptions = SessionColorOptions + ", dim"
 
 type Config struct {
 	Palette   PaletteConfig   `json:"palette" toml:"palette"`
 	Picker    PickerConfig    `json:"picker" toml:"picker"`
+	Session   SessionConfig   `json:"session" toml:"session"`
+	Agents    AgentsConfig    `json:"agents" toml:"agents"`
 	Projects  ProjectsConfig  `json:"projects" toml:"projects"`
 	Commands  []Command       `json:"commands" toml:"commands,omitempty"`
 	QuickDirs []QuickDir      `json:"quick_dirs,omitempty" toml:"quick_dirs,omitempty"`
@@ -32,7 +37,44 @@ type PaletteConfig struct {
 }
 
 type PickerConfig struct {
-	ShowHelp bool `json:"show_help" toml:"show_help"`
+	ShowHelp     bool     `json:"show_help" toml:"show_help"`
+	PreviewWidth string   `json:"preview_width" toml:"preview_width"`
+	TabOrder     []string `json:"tab_order" toml:"tab_order"`
+}
+
+type SessionConfig struct {
+	Color string `json:"color" toml:"color"`
+}
+
+type AgentsConfig struct {
+	Icons  AgentIconsConfig  `json:"icons" toml:"icons"`
+	Colors AgentColorsConfig `json:"colors" toml:"colors"`
+}
+
+type AgentIconsConfig struct {
+	Codex      string `json:"codex" toml:"codex"`
+	Claude     string `json:"claude" toml:"claude"`
+	Other      string `json:"other" toml:"other"`
+	Current    string `json:"current" toml:"current"`
+	Branch     string `json:"branch" toml:"branch"`
+	LastBranch string `json:"last_branch" toml:"last_branch"`
+	Attention  string `json:"attention" toml:"attention"`
+	Working    string `json:"working" toml:"working"`
+	Waiting    string `json:"waiting" toml:"waiting"`
+	Unknown    string `json:"unknown" toml:"unknown"`
+}
+
+type AgentColorsConfig struct {
+	Codex     string `json:"codex" toml:"codex"`
+	Claude    string `json:"claude" toml:"claude"`
+	Other     string `json:"other" toml:"other"`
+	Branch    string `json:"branch" toml:"branch"`
+	Thread    string `json:"thread" toml:"thread"`
+	Workdir   string `json:"workdir" toml:"workdir"`
+	Attention string `json:"attention" toml:"attention"`
+	Working   string `json:"working" toml:"working"`
+	Waiting   string `json:"waiting" toml:"waiting"`
+	Unknown   string `json:"unknown" toml:"unknown"`
 }
 
 type ProjectsConfig struct {
@@ -52,8 +94,9 @@ type EditorConfig struct {
 }
 
 type LinksConfig struct {
-	Alternate LinkAlternateConfig `json:"alternate" toml:"alternate"`
-	Open      OpenConfig          `json:"open" toml:"open"`
+	URLSchemes []string            `json:"url_schemes" toml:"url_schemes"`
+	Alternate  LinkAlternateConfig `json:"alternate" toml:"alternate"`
+	Open       OpenConfig          `json:"open" toml:"open"`
 }
 
 type LinkAlternateConfig struct {
@@ -136,6 +179,38 @@ func Default() Config {
 		Palette: PaletteConfig{
 			Sections: []string{"sessions", "panes"},
 		},
+		Picker: PickerConfig{
+			PreviewWidth: "60%",
+			TabOrder:     []string{"palette", "agents", "tools", "projects", "status", "bookmarks"},
+		},
+		Session: SessionConfig{
+			Color: DefaultSessionColor,
+		},
+		Agents: AgentsConfig{
+			Icons: AgentIconsConfig{
+				Codex:      ">",
+				Claude:     "✳",
+				Current:    "*",
+				Branch:     "├─",
+				LastBranch: "└─",
+				Attention:  "!",
+				Working:    "●",
+				Waiting:    "○",
+				Unknown:    "?",
+			},
+			Colors: AgentColorsConfig{
+				Codex:     "blue",
+				Claude:    "orange",
+				Other:     "magenta",
+				Branch:    "dim",
+				Thread:    "default",
+				Workdir:   "dim",
+				Attention: "red",
+				Working:   "green",
+				Waiting:   "yellow",
+				Unknown:   "dim",
+			},
+		},
 		Projects: ProjectsConfig{
 			Roots:         []string{"~/projects"},
 			BootstrapFile: ".tmux-sessionizer",
@@ -154,6 +229,7 @@ func Default() Config {
 			},
 		},
 		Links: LinksConfig{
+			URLSchemes: []string{"http", "https", "slack", "tg"},
 			Alternate: LinkAlternateConfig{
 				Key:         "alt-enter",
 				FileCommand: "open -a TextEdit",
@@ -276,6 +352,55 @@ func overlayDefined(dst *Config, src Config, meta toml.MetaData) {
 	if meta.IsDefined("picker", "show_help") {
 		dst.Picker.ShowHelp = src.Picker.ShowHelp
 	}
+	if meta.IsDefined("picker", "preview_width") {
+		dst.Picker.PreviewWidth = src.Picker.PreviewWidth
+	}
+	if meta.IsDefined("picker", "tab_order") {
+		dst.Picker.TabOrder = src.Picker.TabOrder
+	}
+	if meta.IsDefined("session", "color") {
+		dst.Session.Color = src.Session.Color
+	}
+	for _, field := range []struct {
+		path  string
+		value *string
+		src   string
+	}{
+		{path: "codex", value: &dst.Agents.Icons.Codex, src: src.Agents.Icons.Codex},
+		{path: "claude", value: &dst.Agents.Icons.Claude, src: src.Agents.Icons.Claude},
+		{path: "other", value: &dst.Agents.Icons.Other, src: src.Agents.Icons.Other},
+		{path: "current", value: &dst.Agents.Icons.Current, src: src.Agents.Icons.Current},
+		{path: "branch", value: &dst.Agents.Icons.Branch, src: src.Agents.Icons.Branch},
+		{path: "last_branch", value: &dst.Agents.Icons.LastBranch, src: src.Agents.Icons.LastBranch},
+		{path: "attention", value: &dst.Agents.Icons.Attention, src: src.Agents.Icons.Attention},
+		{path: "working", value: &dst.Agents.Icons.Working, src: src.Agents.Icons.Working},
+		{path: "waiting", value: &dst.Agents.Icons.Waiting, src: src.Agents.Icons.Waiting},
+		{path: "unknown", value: &dst.Agents.Icons.Unknown, src: src.Agents.Icons.Unknown},
+	} {
+		if meta.IsDefined("agents", "icons", field.path) {
+			*field.value = field.src
+		}
+	}
+	for _, field := range []struct {
+		path  string
+		value *string
+		src   string
+	}{
+		{path: "codex", value: &dst.Agents.Colors.Codex, src: src.Agents.Colors.Codex},
+		{path: "claude", value: &dst.Agents.Colors.Claude, src: src.Agents.Colors.Claude},
+		{path: "other", value: &dst.Agents.Colors.Other, src: src.Agents.Colors.Other},
+		{path: "branch", value: &dst.Agents.Colors.Branch, src: src.Agents.Colors.Branch},
+		{path: "thread", value: &dst.Agents.Colors.Thread, src: src.Agents.Colors.Thread},
+		{path: "workdir", value: &dst.Agents.Colors.Workdir, src: src.Agents.Colors.Workdir},
+		{path: "attention", value: &dst.Agents.Colors.Attention, src: src.Agents.Colors.Attention},
+		{path: "working", value: &dst.Agents.Colors.Working, src: src.Agents.Colors.Working},
+		{path: "waiting", value: &dst.Agents.Colors.Waiting, src: src.Agents.Colors.Waiting},
+		{path: "unknown", value: &dst.Agents.Colors.Unknown, src: src.Agents.Colors.Unknown},
+	} {
+		if meta.IsDefined("agents", "colors", field.path) {
+			*field.value = field.src
+		}
+	}
 	if meta.IsDefined("projects", "roots") {
 		dst.Projects.Roots = src.Projects.Roots
 	}
@@ -302,6 +427,9 @@ func overlayDefined(dst *Config, src Config, meta toml.MetaData) {
 	}
 	if meta.IsDefined("editor", "popup", "border") {
 		dst.Editor.Popup.Border = src.Editor.Popup.Border
+	}
+	if meta.IsDefined("links", "url_schemes") {
+		dst.Links.URLSchemes = src.Links.URLSchemes
 	}
 	if meta.IsDefined("links", "alternate", "key") {
 		dst.Links.Alternate.Key = src.Links.Alternate.Key
@@ -358,6 +486,41 @@ func overlayDefined(dst *Config, src Config, meta toml.MetaData) {
 
 func normalizeConfig(cfg *Config) {
 	cfg.Links.Alternate.Key = strings.TrimSpace(cfg.Links.Alternate.Key)
+	for i, scheme := range cfg.Links.URLSchemes {
+		cfg.Links.URLSchemes[i] = strings.ToLower(strings.TrimSpace(scheme))
+	}
+	cfg.Session.Color = strings.ToLower(strings.TrimSpace(cfg.Session.Color))
+	for _, icon := range []*string{
+		&cfg.Agents.Icons.Codex,
+		&cfg.Agents.Icons.Claude,
+		&cfg.Agents.Icons.Other,
+		&cfg.Agents.Icons.Current,
+		&cfg.Agents.Icons.Branch,
+		&cfg.Agents.Icons.LastBranch,
+		&cfg.Agents.Icons.Attention,
+		&cfg.Agents.Icons.Working,
+		&cfg.Agents.Icons.Waiting,
+		&cfg.Agents.Icons.Unknown,
+	} {
+		*icon = strings.TrimSpace(*icon)
+	}
+	for _, color := range []*string{
+		&cfg.Agents.Colors.Codex,
+		&cfg.Agents.Colors.Claude,
+		&cfg.Agents.Colors.Other,
+		&cfg.Agents.Colors.Branch,
+		&cfg.Agents.Colors.Thread,
+		&cfg.Agents.Colors.Workdir,
+		&cfg.Agents.Colors.Attention,
+		&cfg.Agents.Colors.Working,
+		&cfg.Agents.Colors.Waiting,
+		&cfg.Agents.Colors.Unknown,
+	} {
+		*color = strings.ToLower(strings.TrimSpace(*color))
+	}
+	for i, mode := range cfg.Picker.TabOrder {
+		cfg.Picker.TabOrder[i] = strings.ToLower(strings.TrimSpace(mode))
+	}
 	for _, open := range []*OpenConfig{
 		&cfg.Links.Open,
 		&cfg.Bookmarks.Open,
@@ -372,6 +535,43 @@ func applyDefaults(cfg *Config) {
 	def := Default()
 	if len(cfg.Palette.Sections) == 0 {
 		cfg.Palette.Sections = append([]string(nil), def.Palette.Sections...)
+	}
+	if cfg.Picker.PreviewWidth == "" {
+		cfg.Picker.PreviewWidth = def.Picker.PreviewWidth
+	}
+	if len(cfg.Picker.TabOrder) == 0 {
+		cfg.Picker.TabOrder = append([]string(nil), def.Picker.TabOrder...)
+	}
+	if cfg.Session.Color == "" {
+		cfg.Session.Color = def.Session.Color
+	}
+	for _, field := range []struct {
+		value    *string
+		fallback string
+	}{
+		{value: &cfg.Agents.Icons.Codex, fallback: def.Agents.Icons.Codex},
+		{value: &cfg.Agents.Icons.Claude, fallback: def.Agents.Icons.Claude},
+		{value: &cfg.Agents.Icons.Current, fallback: def.Agents.Icons.Current},
+		{value: &cfg.Agents.Icons.Branch, fallback: def.Agents.Icons.Branch},
+		{value: &cfg.Agents.Icons.LastBranch, fallback: def.Agents.Icons.LastBranch},
+		{value: &cfg.Agents.Icons.Attention, fallback: def.Agents.Icons.Attention},
+		{value: &cfg.Agents.Icons.Working, fallback: def.Agents.Icons.Working},
+		{value: &cfg.Agents.Icons.Waiting, fallback: def.Agents.Icons.Waiting},
+		{value: &cfg.Agents.Icons.Unknown, fallback: def.Agents.Icons.Unknown},
+		{value: &cfg.Agents.Colors.Codex, fallback: def.Agents.Colors.Codex},
+		{value: &cfg.Agents.Colors.Claude, fallback: def.Agents.Colors.Claude},
+		{value: &cfg.Agents.Colors.Other, fallback: def.Agents.Colors.Other},
+		{value: &cfg.Agents.Colors.Branch, fallback: def.Agents.Colors.Branch},
+		{value: &cfg.Agents.Colors.Thread, fallback: def.Agents.Colors.Thread},
+		{value: &cfg.Agents.Colors.Workdir, fallback: def.Agents.Colors.Workdir},
+		{value: &cfg.Agents.Colors.Attention, fallback: def.Agents.Colors.Attention},
+		{value: &cfg.Agents.Colors.Working, fallback: def.Agents.Colors.Working},
+		{value: &cfg.Agents.Colors.Waiting, fallback: def.Agents.Colors.Waiting},
+		{value: &cfg.Agents.Colors.Unknown, fallback: def.Agents.Colors.Unknown},
+	} {
+		if *field.value == "" {
+			*field.value = field.fallback
+		}
 	}
 	if cfg.Projects.BootstrapFile == "" {
 		cfg.Projects.BootstrapFile = def.Projects.BootstrapFile
@@ -399,6 +599,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Editor.Popup.Border == "" {
 		cfg.Editor.Popup.Border = def.Editor.Popup.Border
+	}
+	if len(cfg.Links.URLSchemes) == 0 {
+		cfg.Links.URLSchemes = append([]string(nil), def.Links.URLSchemes...)
 	}
 	if cfg.Links.Alternate.Key == "" {
 		cfg.Links.Alternate.Key = def.Links.Alternate.Key
@@ -460,10 +663,75 @@ func Validate(cfg Config) error {
 		}
 		seenPaletteSections[section] = true
 	}
+	seenTabModes := make(map[string]bool)
+	for i, mode := range cfg.Picker.TabOrder {
+		switch mode {
+		case "palette", "agents", "tools", "projects", "links", "status", "bookmarks":
+		default:
+			return fmt.Errorf("picker.tab_order[%d] must be one of palette, agents, tools, projects, links, status, bookmarks", i)
+		}
+		if seenTabModes[mode] {
+			return fmt.Errorf("picker.tab_order[%d] duplicates %q", i, mode)
+		}
+		seenTabModes[mode] = true
+	}
+	if !validSessionColor(cfg.Session.Color) {
+		return fmt.Errorf("session.color must be one of %s", SessionColorOptions)
+	}
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{name: "codex", value: cfg.Agents.Icons.Codex},
+		{name: "claude", value: cfg.Agents.Icons.Claude},
+		{name: "current", value: cfg.Agents.Icons.Current},
+		{name: "branch", value: cfg.Agents.Icons.Branch},
+		{name: "last_branch", value: cfg.Agents.Icons.LastBranch},
+		{name: "attention", value: cfg.Agents.Icons.Attention},
+		{name: "working", value: cfg.Agents.Icons.Working},
+		{name: "waiting", value: cfg.Agents.Icons.Waiting},
+		{name: "unknown", value: cfg.Agents.Icons.Unknown},
+	} {
+		if err := validateAgentIcon("agents.icons."+field.name, field.value, false); err != nil {
+			return err
+		}
+	}
+	if err := validateAgentIcon("agents.icons.other", cfg.Agents.Icons.Other, true); err != nil {
+		return err
+	}
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{name: "codex", value: cfg.Agents.Colors.Codex},
+		{name: "claude", value: cfg.Agents.Colors.Claude},
+		{name: "other", value: cfg.Agents.Colors.Other},
+		{name: "branch", value: cfg.Agents.Colors.Branch},
+		{name: "thread", value: cfg.Agents.Colors.Thread},
+		{name: "workdir", value: cfg.Agents.Colors.Workdir},
+		{name: "attention", value: cfg.Agents.Colors.Attention},
+		{name: "working", value: cfg.Agents.Colors.Working},
+		{name: "waiting", value: cfg.Agents.Colors.Waiting},
+		{name: "unknown", value: cfg.Agents.Colors.Unknown},
+	} {
+		if !validAgentColor(field.value) {
+			return fmt.Errorf("agents.colors.%s must be one of %s", field.name, AgentColorOptions)
+		}
+	}
 	for i, dir := range cfg.Bookmarks.Dirs {
 		if strings.TrimSpace(dir) == "" {
 			return fmt.Errorf("bookmarks.dirs[%d] is required", i)
 		}
+	}
+	seenURLSchemes := make(map[string]bool)
+	for i, scheme := range cfg.Links.URLSchemes {
+		if !validURLScheme(scheme) {
+			return fmt.Errorf("links.url_schemes[%d] must match [a-z][a-z0-9+.-]*", i)
+		}
+		if seenURLSchemes[scheme] {
+			return fmt.Errorf("links.url_schemes[%d] duplicates %q", i, scheme)
+		}
+		seenURLSchemes[scheme] = true
 	}
 	if err := validateLinkAlternateKey(cfg.Links.Alternate.Key); err != nil {
 		return err
@@ -512,16 +780,57 @@ func Validate(cfg Config) error {
 	return nil
 }
 
+func validateAgentIcon(name string, value string, allowEmpty bool) error {
+	if value == "" {
+		if allowEmpty {
+			return nil
+		}
+		return fmt.Errorf("%s is required", name)
+	}
+	if strings.ContainsAny(value, "\t\r\n") {
+		return fmt.Errorf("%s cannot contain tabs or newlines", name)
+	}
+	return nil
+}
+
+func validAgentColor(color string) bool {
+	return color == "dim" || validSessionColor(color)
+}
+
+func validURLScheme(scheme string) bool {
+	if scheme == "" || scheme[0] < 'a' || scheme[0] > 'z' {
+		return false
+	}
+	for _, char := range scheme[1:] {
+		if (char < 'a' || char > 'z') && (char < '0' || char > '9') && char != '+' && char != '.' && char != '-' {
+			return false
+		}
+	}
+	return true
+}
+
 func validateLinkAlternateKey(key string) error {
 	key = strings.TrimSpace(key)
 	if strings.ContainsAny(key, ", \t\r\n") {
 		return fmt.Errorf("links.alternate.key must be one fzf key without commas or whitespace")
 	}
 	switch key {
-	case "enter", "alt-1", "alt-2", "alt-3", "alt-4", "alt-5", "alt-6":
+	case "enter", "tab", "btab", "alt-1", "alt-2", "alt-3", "alt-4", "alt-5", "alt-6":
 		return fmt.Errorf("links.alternate.key %q is reserved for picker behavior", key)
 	default:
 		return nil
+	}
+}
+
+func validSessionColor(color string) bool {
+	switch color {
+	case "default",
+		"black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
+		"bright_black", "bright_red", "bright_green", "bright_yellow", "bright_blue", "bright_magenta", "bright_cyan", "bright_white",
+		"orange":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -576,8 +885,45 @@ func Sample() string {
 sections = ["sessions", "panes"]
 
 [picker]
-# Show helper lines above fzf results.
+# Show optional view-specific helper text.
 show_help = false
+# Width of right-side previews in agents and status.
+preview_width = "60%%"
+# View order for Tab and Shift-Tab navigation.
+tab_order = ["palette", "agents", "tools", "projects", "status", "bookmarks"]
+
+[session]
+# All supported session-name colors:
+# default, black, red, green, yellow, blue, magenta, cyan, white, orange,
+# bright_black, bright_red, bright_green, bright_yellow, bright_blue,
+# bright_magenta, bright_cyan, bright_white.
+color = "cyan"
+
+[agents.icons]
+# Empty other uses the detected product name.
+codex = ">"
+claude = "✳"
+other = ""
+current = "*"
+branch = "├─"
+last_branch = "└─"
+attention = "!"
+working = "●"
+waiting = "○"
+unknown = "?"
+
+[agents.colors]
+# Supports session colors listed above plus dim.
+codex = "blue"
+claude = "orange"
+other = "magenta"
+branch = "dim"
+thread = "default"
+workdir = "dim"
+attention = "red"
+working = "green"
+waiting = "yellow"
+unknown = "dim"
 
 [projects]
 # Root directories scanned by the projects view.
@@ -640,6 +986,10 @@ command = "$EDITOR"
 width = "80%%"
 height = "80%%"
 border = "rounded"
+
+[links]
+# URL schemes extracted from pane scrollback. Local config replaces this list.
+url_schemes = ["http", "https", "slack", "tg"]
 
 [links.alternate]
 # Secondary opener used by Alt-Enter in the links view.

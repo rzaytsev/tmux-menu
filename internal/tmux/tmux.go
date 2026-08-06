@@ -13,6 +13,7 @@ const sep = "\x1f"
 type Pane struct {
 	SessionName     string
 	SessionID       string
+	SessionPath     string
 	WindowName      string
 	WindowID        string
 	WindowIndex     string
@@ -61,6 +62,7 @@ func ListPanes(ctx context.Context) ([]Pane, error) {
 		"#{window_active}",
 		"#{pane_pid}",
 		"#{automatic-rename}",
+		"#{session_path}",
 	}, sep)
 	out, err := Run(ctx, "list-panes", "-a", "-F", format)
 	if err != nil {
@@ -87,9 +89,14 @@ func ParsePanes(out string) []Pane {
 		if len(parts) > 13 {
 			automaticRename = parts[13] == "1"
 		}
+		sessionPath := ""
+		if len(parts) > 14 {
+			sessionPath = parts[14]
+		}
 		panes = append(panes, Pane{
 			SessionName:     parts[0],
 			SessionID:       parts[1],
+			SessionPath:     sessionPath,
 			WindowName:      parts[2],
 			WindowID:        parts[3],
 			WindowIndex:     parts[4],

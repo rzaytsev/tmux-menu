@@ -156,15 +156,18 @@ func buildPopupCommand(exe, dispatchPath string, rt runtimeContext, args []strin
 	return strings.Join(parts, " ")
 }
 
-var viewSwitchKeys = []string{"alt-1", "alt-2", "alt-3", "alt-4", "alt-5", "alt-6"}
+var viewSwitchKeys = []string{"tab", "btab", "alt-1", "alt-2", "alt-3", "alt-4", "alt-5", "alt-6"}
 
-const viewSwitchHelp = "Alt-1 main | Alt-2 agents | Alt-3 tools | Alt-4 projects | Alt-5 status | Alt-6 bookmarks"
+const viewSwitchHelp = "Tab:Next  Shift-Tab:Previous | Alt+ 1:Main  2:Agents  3:Tools  4:Projects  5:Status  6:Bookmarks"
 
-func viewSwitchHeaderForConfig(cfg config.Config) string {
-	if !cfg.Picker.ShowHelp {
-		return ""
-	}
+func viewSwitchFooter() string {
 	return viewSwitchHelp
+}
+
+func pickerPreviewWindow(width string, options ...string) string {
+	parts := []string{"right", width}
+	parts = append(parts, options...)
+	return strings.Join(parts, ":")
 }
 
 func viewModeForKey(key string) string {
@@ -184,6 +187,25 @@ func viewModeForKey(key string) string {
 	default:
 		return ""
 	}
+}
+
+func tabViewMode(current string, key string, order []string) string {
+	if (key != "tab" && key != "btab") || len(order) == 0 {
+		return ""
+	}
+	step := 1
+	if key == "btab" {
+		step = -1
+	}
+	for i, mode := range order {
+		if mode == current {
+			return order[(i+step+len(order))%len(order)]
+		}
+	}
+	if key == "btab" {
+		return order[len(order)-1]
+	}
+	return order[0]
 }
 
 func validViewMode(mode string) bool {
@@ -206,6 +228,14 @@ func runPickerLoop(ctx context.Context, mode string) error {
 		}
 		if next := viewModeForKey(result.Key); next != "" {
 			mode = next
+			continue
+		}
+		if result.Key == "tab" || result.Key == "btab" {
+			cfg, _, err := loadConfig(ctx)
+			if err != nil {
+				return err
+			}
+			mode = tabViewMode(mode, result.Key, cfg.Picker.TabOrder)
 			continue
 		}
 		if !result.Selected {

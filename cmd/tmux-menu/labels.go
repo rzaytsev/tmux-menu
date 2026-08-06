@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"tmux-menu/internal/config"
 	"tmux-menu/internal/tmux"
 )
 
@@ -45,23 +46,90 @@ func paneLabel(p tmux.Pane, currentPaneID string) string {
 		colorKind("pane"), dim(p.SessionName+"/"+p.WindowIndex+"."+p.PaneIndex), colorPaneTitle(title), colorCommand(p.CurrentCommand), dim(path), state)
 }
 
-func agentPaneLabel(p tmux.Pane, currentPaneID string, status agentStatus, name string) string {
+func agentPaneLabel(p tmux.Pane, currentPaneID string, status agentStatus, name string, sessionColor string) string {
+	return agentPaneLabelWithConfig(p, currentPaneID, status, name, sessionColor, config.Default().Agents)
+}
+
+func agentPaneLabelWithConfig(p tmux.Pane, currentPaneID string, status agentStatus, name string, sessionColor string, agentsConfig config.AgentsConfig) string {
 	title := agentPaneTitle(p)
-	state := ""
+	label := name
 	if p.PaneID == currentPaneID {
-		state = "  " + dim("current")
+		label += agentsConfig.Icons.Current
 	}
-	return fmt.Sprintf("%s  %s  %s  %s  %s%s",
-		colorAgentName(name), dim(p.SessionName+"/"+p.WindowIndex+"."+p.PaneIndex), colorPaneTitle(title), colorAgentStatus(status), dim(shortenHome(p.CurrentPath)), state)
+	return fmt.Sprintf("%s %s %s  %s  %s",
+		colorAgentStatusWithConfig(status, agentsConfig), colorAgentNameWithConfig(label, name, agentsConfig), colorSessionWithColor(shortUUID(p.SessionName), sessionColor), colorAgentThread(title, agentsConfig), colorAgentText(shortenHome(p.CurrentPath), agentsConfig.Colors.Workdir, false))
+}
+
+func agentSessionLabel(p tmux.Pane, sessionColor string) string {
+	return colorSessionWithColor(shortUUID(p.SessionName), sessionColor)
+}
+
+func agentTreePaneLabel(p tmux.Pane, currentPaneID string, status agentStatus, name string, last bool) string {
+	return agentTreePaneLabelWithConfig(p, currentPaneID, status, name, last, config.Default().Agents)
+}
+
+func agentTreePaneLabelWithConfig(p tmux.Pane, currentPaneID string, status agentStatus, name string, last bool, agentsConfig config.AgentsConfig) string {
+	branch := agentsConfig.Icons.Branch
+	if last {
+		branch = agentsConfig.Icons.LastBranch
+	}
+	title := agentTreePaneTitle(p, name)
+	if p.PaneID != "" && p.PaneID == currentPaneID {
+		title = agentsConfig.Icons.Current + title
+	}
+	return fmt.Sprintf("  %s %s %s %s  %s",
+		colorAgentText(branch, agentsConfig.Colors.Branch, false), colorAgentStatusWithConfig(status, agentsConfig), colorAgentIcon(name, agentsConfig), colorAgentThread(title, agentsConfig), colorAgentText(agentTreeWorkdir(p.CurrentPath), agentsConfig.Colors.Workdir, false))
+}
+
+func agentTreeWorkdir(path string) string {
+	return strings.TrimPrefix(shortenHome(path), "~/projects/")
+}
+
+func agentTreePaneTitle(p tmux.Pane, name string) string {
+	title := agentPaneTitle(p)
+	if name != "claude" {
+		return title
+	}
+	fields := strings.Fields(title)
+	if len(fields) == 0 || (!claudeWorkingTitleMarker(fields[0]) && !claudeWaitingTitleMarker(fields[0])) {
+		return title
+	}
+	if len(fields) > 1 {
+		return strings.TrimSpace(strings.TrimPrefix(title, fields[0]))
+	}
+	return filepath.Base(p.CurrentPath)
+}
+
+func shortUUID(name string) string {
+	parts := strings.Split(name, "-")
+	lengths := []int{8, 4, 4, 4, 12}
+	if len(parts) != len(lengths) {
+		return name
+	}
+	for i, part := range parts {
+		if len(part) != lengths[i] || !isHex(part) {
+			return name
+		}
+	}
+	return parts[0]
+}
+
+func isHex(value string) bool {
+	for _, char := range value {
+		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f') || (char >= 'A' && char <= 'F')) {
+			return false
+		}
+	}
+	return value != ""
 }
 
 func agentPaneTitle(p tmux.Pane) string {
 	if info, ok := codexPaneTitleInfoFromPane(p); ok {
 		switch {
 		case info.threadTitle != "":
-			return info.threadTitle
+			return shortUUID(info.threadTitle)
 		case info.currentDir != "":
-			return info.currentDir
+			return shortUUID(info.currentDir)
 		case p.CurrentPath != "":
 			return filepath.Base(p.CurrentPath)
 		}
@@ -70,7 +138,7 @@ func agentPaneTitle(p tmux.Pane) string {
 	if title == "" {
 		title = p.CurrentCommand
 	}
-	return title
+	return shortUUID(title)
 }
 
 func cleanPaneTitle(title string) string {
@@ -124,16 +192,27 @@ func looksLocalPromptRest(rest string) bool {
 }
 
 const (
-	ansiReset   = "\x1b[0m"
-	ansiBold    = "\x1b[1m"
-	ansiDim     = "\x1b[2m"
-	ansiBlue    = "\x1b[34m"
-	ansiCyan    = "\x1b[36m"
-	ansiGreen   = "\x1b[32m"
-	ansiMagenta = "\x1b[35m"
-	ansiOrange  = "\x1b[38;5;208m"
-	ansiRed     = "\x1b[31m"
-	ansiYellow  = "\x1b[33m"
+	ansiReset         = "\x1b[0m"
+	ansiBold          = "\x1b[1m"
+	ansiDim           = "\x1b[2m"
+	ansiDefault       = "\x1b[39m"
+	ansiBlack         = "\x1b[30m"
+	ansiRed           = "\x1b[31m"
+	ansiGreen         = "\x1b[32m"
+	ansiYellow        = "\x1b[33m"
+	ansiBlue          = "\x1b[34m"
+	ansiMagenta       = "\x1b[35m"
+	ansiCyan          = "\x1b[36m"
+	ansiWhite         = "\x1b[37m"
+	ansiBrightBlack   = "\x1b[90m"
+	ansiBrightRed     = "\x1b[91m"
+	ansiBrightGreen   = "\x1b[92m"
+	ansiBrightYellow  = "\x1b[93m"
+	ansiBrightBlue    = "\x1b[94m"
+	ansiBrightMagenta = "\x1b[95m"
+	ansiBrightCyan    = "\x1b[96m"
+	ansiBrightWhite   = "\x1b[97m"
+	ansiOrange        = "\x1b[38;5;208m"
 )
 
 func colorKind(kind string) string {
@@ -142,6 +221,55 @@ func colorKind(kind string) string {
 
 func colorSession(name string) string {
 	return ansiBold + ansiCyan + name + ansiReset
+}
+
+func colorSessionWithColor(name string, color string) string {
+	return ansiBold + ansiColor(color) + name + ansiReset
+}
+
+func ansiColor(color string) string {
+	switch color {
+	case "default":
+		return ansiDefault
+	case "black":
+		return ansiBlack
+	case "red":
+		return ansiRed
+	case "green":
+		return ansiGreen
+	case "yellow":
+		return ansiYellow
+	case "blue":
+		return ansiBlue
+	case "magenta":
+		return ansiMagenta
+	case "cyan":
+		return ansiCyan
+	case "white":
+		return ansiWhite
+	case "bright_black":
+		return ansiBrightBlack
+	case "bright_red":
+		return ansiBrightRed
+	case "bright_green":
+		return ansiBrightGreen
+	case "bright_yellow":
+		return ansiBrightYellow
+	case "bright_blue":
+		return ansiBrightBlue
+	case "bright_magenta":
+		return ansiBrightMagenta
+	case "bright_cyan":
+		return ansiBrightCyan
+	case "bright_white":
+		return ansiBrightWhite
+	case "orange":
+		return ansiOrange
+	case "dim":
+		return ansiDim
+	default:
+		return ansiCyan
+	}
 }
 
 func colorPaneTitle(title string) string {
@@ -160,27 +288,58 @@ func colorCommand(command string) string {
 }
 
 func colorAgentStatus(status agentStatus) string {
+	return colorAgentStatusWithConfig(status, config.Default().Agents)
+}
+
+func colorAgentStatusWithConfig(status agentStatus, agentsConfig config.AgentsConfig) string {
 	switch status {
 	case agentStatusAttention:
-		return ansiBold + ansiRed + "attention" + ansiReset
+		return colorAgentText(agentsConfig.Icons.Attention, agentsConfig.Colors.Attention, true)
 	case agentStatusWorking:
-		return ansiGreen + "working" + ansiReset
+		return colorAgentText(agentsConfig.Icons.Working, agentsConfig.Colors.Working, false)
 	case agentStatusWaiting:
-		return ansiYellow + "waiting" + ansiReset
+		return colorAgentText(agentsConfig.Icons.Waiting, agentsConfig.Colors.Waiting, false)
 	default:
-		return ansiDim + "unknown" + ansiReset
+		return colorAgentText(agentsConfig.Icons.Unknown, agentsConfig.Colors.Unknown, false)
 	}
 }
 
-func colorAgentName(name string) string {
+func colorAgentNameWithConfig(label string, name string, agentsConfig config.AgentsConfig) string {
 	switch name {
 	case "codex":
-		return ansiGreen + name + ansiReset
+		return colorAgentText(label, agentsConfig.Colors.Codex, false)
 	case "claude":
-		return ansiOrange + name + ansiReset
+		return colorAgentText(label, agentsConfig.Colors.Claude, false)
 	default:
-		return ansiMagenta + name + ansiReset
+		return colorAgentText(label, agentsConfig.Colors.Other, false)
 	}
+}
+
+func colorAgentIcon(name string, agentsConfig config.AgentsConfig) string {
+	switch name {
+	case "codex":
+		return colorAgentText(agentsConfig.Icons.Codex, agentsConfig.Colors.Codex, false)
+	case "claude":
+		return colorAgentText(agentsConfig.Icons.Claude, agentsConfig.Colors.Claude, false)
+	default:
+		icon := agentsConfig.Icons.Other
+		if icon == "" {
+			icon = name
+		}
+		return colorAgentText(icon, agentsConfig.Colors.Other, false)
+	}
+}
+
+func colorAgentThread(title string, agentsConfig config.AgentsConfig) string {
+	return colorAgentText(title, agentsConfig.Colors.Thread, true)
+}
+
+func colorAgentText(text string, color string, bold bool) string {
+	style := ansiColor(color)
+	if bold {
+		style = ansiBold + style
+	}
+	return style + text + ansiReset
 }
 
 func commandClass(command string) string {

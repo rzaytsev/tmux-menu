@@ -45,6 +45,8 @@ tmux-menu sample-config
 
 Inside picker views:
 
+- `Tab`: next view in `picker.tab_order`
+- `Shift-Tab`: previous view in `picker.tab_order`
 - `Alt-1`: palette
 - `Alt-2`: agents
 - `Alt-3`: tools
@@ -53,8 +55,8 @@ Inside picker views:
 - `Alt-6`: bookmarks
 - `Alt-Enter` in links: alternate opener
 
-The helper line for these shortcuts is hidden by default. Enable it with
-`picker.show_help = true`.
+The navigation shortcuts are shown in a footer at the bottom of every picker.
+Empty views show `No items` and remain navigable with the same shortcuts.
 
 ## tmux Bindings
 
@@ -100,6 +102,11 @@ sections = ["sessions", "panes"]
 
 [picker]
 show_help = false
+preview_width = "60%"
+tab_order = ["palette", "agents", "tools", "projects", "status", "bookmarks"]
+
+[session]
+color = "cyan"
 
 [projects]
 roots = ["~/projects"]
@@ -140,6 +147,9 @@ command = "$EDITOR"
 width = "80%"
 height = "80%"
 border = "rounded"
+
+[links]
+url_schemes = ["http", "https", "slack", "tg"]
 
 [links.alternate]
 key = "alt-enter"
@@ -184,7 +194,64 @@ sections = ["sessions", "panes"]
 
 ### `picker`
 
-- `show_help`: show the Alt-key helper line above fzf results.
+- `show_help`: show optional view-specific helper text.
+- `preview_width`: width of the right-side preview in every preview-enabled
+  picker. Defaults to `60%`; its height fills the picker popup.
+- `tab_order`: picker views visited by `Tab` and `Shift-Tab`, in order. Valid
+  values are `palette`, `agents`, `tools`, `projects`, `links`, `status`, and
+  `bookmarks`. The default omits `links`, matching the numbered shortcuts.
+
+### `session`
+
+- `color`: bold session-header color in the agents tree. Valid values are
+  `default`, `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `white`,
+  `bright_black`, `bright_red`, `bright_green`, `bright_yellow`, `bright_blue`,
+  `bright_magenta`, `bright_cyan`, `bright_white`, and `orange`. The built-in
+  default is `cyan`; `default` uses the terminal's foreground color.
+
+Put this setting in the `.tmux-menu.conf` at a tmux session root to give that
+session its own header color:
+
+```toml
+[session]
+color = "red"
+```
+
+### `agents`
+
+`[agents.icons]` configures every symbolic part of agent rows: `codex`,
+`claude`, `other`, `current`, `branch`, `last_branch`, `attention`, `working`,
+`waiting`, and `unknown`. An empty `other` keeps the detected product name.
+
+`[agents.colors]` configures `codex`, `claude`, `other`, `branch`, `thread`,
+`workdir`, `attention`, `working`, `waiting`, and `unknown`. Colors accept every
+`session.color` value plus `dim`.
+
+```toml
+[agents.icons]
+codex = ">"
+claude = "✳"
+other = ""
+current = "*"
+branch = "├─"
+last_branch = "└─"
+attention = "!"
+working = "●"
+waiting = "○"
+unknown = "?"
+
+[agents.colors]
+codex = "blue"
+claude = "orange"
+other = "magenta"
+branch = "dim"
+thread = "default"
+workdir = "dim"
+attention = "red"
+working = "green"
+waiting = "yellow"
+unknown = "dim"
+```
 
 ### `projects`
 
@@ -258,10 +325,10 @@ session = "my_project"
 
 ### `popup`
 
-Controls the main tmux popup:
+Controls all picker tmux popups:
 
-- `width`
-- `height`
+- `width`: popup width, default `90%`.
+- `height`: popup height, default `80%`; this also controls preview height.
 - `border`
 
 ### `editor`
@@ -276,9 +343,20 @@ Controls the main tmux popup:
 
 `links` captures origin pane scrollback and extracts:
 
-- `http://` and `https://` URLs
+- URLs whose scheme is listed in `links.url_schemes`; defaults are `http`,
+  `https`, `slack`, and `tg`
 - absolute file paths with optional line/column/range suffixes
 - relative file paths resolved from the origin pane directory
+
+```toml
+[links]
+url_schemes = ["http", "https", "slack", "tg"]
+```
+
+Local config replaces the inherited list. Scheme names are case-insensitive and
+must use URI scheme syntax. Add schemes such as `mailto`, `zoommtg`, or
+`obsidian` only when useful; keeping the list narrow avoids unrelated text in
+scrollback becoming selectable links.
 
 Enter first copies the target to the macOS clipboard. URL rows run `open`.
 File rows use `[links.open]`.
@@ -294,8 +372,9 @@ File rows use `[links.open]`.
 - `file_command`: alternate file opener
 - `url_command`: alternate URL opener
 
-`Alt-1` through `Alt-6` are reserved for view switching and cannot be used as
-the alternate opener key. `enter`, commas, and whitespace are also invalid.
+`Tab`, `Shift-Tab`, and `Alt-1` through `Alt-6` are reserved for view switching
+and cannot be used as the alternate opener key. `enter`, commas, and whitespace
+are also invalid.
 
 Use `{}` when the target must appear before later command arguments. tmux-menu
 passes the target as shell data. If `{}` is omitted, the quoted target is
@@ -352,8 +431,18 @@ roots = ["~/projects", "~/work"]
 
 Use `agents` when you run agents in separate panes. tmux-menu detects known
 agent commands and uses pane/window titles for richer status when available.
-Rows show the detected agent type before the session name: Codex is green,
-Claude is orange, and generic foreground commands such as `node` are hidden.
+The picker groups agents under tmux session headers. Headers are display-only,
+omit window/pane indexes, and use the session root's `[session].color`.
+Selectable child rows contain a compact status sign, a blue Codex `>` or
+orange Claude `✳` mark, the thread name, and workdir; other detected agents use
+their product name. These are defaults configurable under `[agents]`. Generic
+foreground commands such as `node` are hidden.
+Displayed workdirs omit the common `~/projects/` prefix.
+Status signs are green `●` for working, yellow `○` for waiting, bold red `!`
+for attention, or dim `?` for unknown. The current agent thread name is prefixed
+with `*` without a separating space. UUID-shaped agent titles and tmux session
+names show only their first segment, and a right-side preview follows the latest
+scrollback lines from the selected pane.
 
 In the main palette, panes in windows with `automatic-rename` disabled are
 shown as `<window name> | <pane title>`. The window name repeats for split panes

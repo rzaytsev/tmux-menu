@@ -26,7 +26,6 @@ type Item struct {
 }
 
 var (
-	urlRefRE  = regexp.MustCompile(`https?://[^\s<>"']+`)
 	fileRefRE = regexp.MustCompile(
 		`(?:^|[\s"'(<\[])(` +
 			`(?:~\/|\.{1,2}\/|\/|[A-Za-z0-9_.-]+\/)?` +
@@ -37,21 +36,24 @@ var (
 	)
 )
 
-func Extract(scrollback string, baseDir string) []Item {
+func Extract(scrollback string, baseDir string, urlSchemes []string) []Item {
 	seen := make(map[string]bool)
 	items := make([]Item, 0)
+	urlRefRE := urlRefRegexp(urlSchemes)
 	for _, line := range strings.Split(scrollback, "\n") {
-		for _, match := range urlRefRE.FindAllString(line, -1) {
-			target := trimURL(match)
-			if !validURL(target) {
-				continue
+		if urlRefRE != nil {
+			for _, match := range urlRefRE.FindAllStringSubmatch(line, -1) {
+				target := trimURL(match[1])
+				if !validURL(target, urlSchemes) {
+					continue
+				}
+				key := string(KindURL) + "\x00" + target
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				items = append(items, Item{Kind: KindURL, Raw: target, Target: target, SourceLine: strings.TrimSpace(line)})
 			}
-			key := string(KindURL) + "\x00" + target
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
-			items = append(items, Item{Kind: KindURL, Raw: target, Target: target, SourceLine: strings.TrimSpace(line)})
 		}
 
 		for _, match := range fileRefRE.FindAllStringSubmatch(line, -1) {
@@ -90,9 +92,35 @@ func trimURL(s string) string {
 	return strings.TrimRight(s, ".,;)]}")
 }
 
-func validURL(s string) bool {
+func urlRefRegexp(schemes []string) *regexp.Regexp {
+	patterns := make([]string, 0, len(schemes))
+	for _, scheme := range schemes {
+		scheme = strings.TrimSpace(scheme)
+		if scheme != "" {
+			patterns = append(patterns, regexp.QuoteMeta(scheme))
+		}
+	}
+	if len(patterns) == 0 {
+		return nil
+	}
+	return regexp.MustCompile(`(?i)(?:^|[^a-z0-9+.-])((?:` + strings.Join(patterns, "|") + `):(?://)?[^\s<>"']+)`)
+}
+
+func validURL(s string, schemes []string) bool {
 	u, err := url.Parse(s)
-	return err == nil && u.Scheme != "" && u.Host != ""
+	if err != nil || u.Scheme == "" || (u.Host == "" && u.Opaque == "" && u.Path == "") {
+		return false
+	}
+	for _, scheme := range schemes {
+		if !strings.EqualFold(u.Scheme, strings.TrimSpace(scheme)) {
+			continue
+		}
+		if strings.EqualFold(u.Scheme, "http") || strings.EqualFold(u.Scheme, "https") {
+			return u.Host != ""
+		}
+		return true
+	}
+	return false
 }
 
 func trimFileRef(s string) string {

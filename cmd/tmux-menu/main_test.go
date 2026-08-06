@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -173,10 +174,132 @@ func TestAgentsShowsOnlyAgentPanesWithStatus(t *testing.T) {
 	if len(labels) != 1 {
 		t.Fatalf("expected one agent label: %#v", labels)
 	}
-	if !strings.HasPrefix(labels[0], "codex") ||
-		!strings.Contains(labels[0], "work/1.2") ||
-		!strings.Contains(labels[0], "working") {
+	if !strings.HasPrefix(labels[0], "● codex work") ||
+		!strings.Contains(labels[0], "work") ||
+		strings.Contains(labels[0], "work/1.2") ||
+		strings.Contains(labels[0], "working") {
 		t.Fatalf("unexpected agent label: %q", labels[0])
+	}
+	if items[0].Preview != "%2" {
+		t.Fatalf("agent preview target = %q, want %%2", items[0].Preview)
+	}
+}
+
+func TestAgentTreeGroupsSessionsAndKeepsOnlyAgentsSelectable(t *testing.T) {
+	panes := []tmux.Pane{
+		{SessionName: "work", SessionID: "$1", WindowID: "@1", PaneID: "%1", PanePID: "100", CurrentCommand: "node", PaneTitle: "tmux-menu|Build tree|Ready", CurrentPath: "/tmp/tmux-menu"},
+		{SessionName: "docs", SessionID: "$2", WindowID: "@2", PaneID: "%3", PanePID: "300", CurrentCommand: "zsh", PaneTitle: "shell", CurrentPath: "/tmp/docs"},
+		{SessionName: "work", SessionID: "$1", WindowID: "@3", PaneID: "%2", PanePID: "200", CurrentCommand: "2.1.217", PaneTitle: "✳ Review infrastructure", CurrentPath: "/tmp/infra"},
+		{SessionName: "docs", SessionID: "$2", WindowID: "@4", PaneID: "%4", PanePID: "400", CurrentCommand: "codex", PaneTitle: "Docs|Working", CurrentPath: "/tmp/docs"},
+	}
+	snapshot := processSnapshot{
+		roots:    map[int]bool{100: true, 200: true, 400: true},
+		statuses: map[int]agentStatus{100: agentStatusWaiting, 200: agentStatusWorking, 400: agentStatusWorking},
+		names:    map[int]string{100: "codex", 200: "claude", 400: "codex"},
+	}
+	items := agentTreeItemsWithProcessSnapshotAndSessionColors(panes, "%2", snapshot, map[string]string{"$1": "green", "$2": "blue"}, config.Default().Agents)
+
+	labels := make([]string, 0, len(items))
+	for _, item := range items {
+		labels = append(labels, stripANSI(item.Label))
+	}
+	want := []string{
+		"work",
+		"  ├─ ○ > Build tree  /tmp/tmux-menu",
+		"  └─ ○ ✳ *Review infrastructure  /tmp/infra",
+		"docs",
+		"  └─ ● > Docs  /tmp/docs",
+	}
+	if !reflect.DeepEqual(labels, want) {
+		t.Fatalf("agent tree:\n%s\nwant:\n%s", strings.Join(labels, "\n"), strings.Join(want, "\n"))
+	}
+	for _, index := range []int{0, 3} {
+		if !items[index].Disabled || items[index].Preview != "" || items[index].Value.dispatch.Mode != "" {
+			t.Fatalf("session row %d should be display-only: %#v", index, items[index])
+		}
+	}
+	for index, paneID := range map[int]string{1: "%1", 2: "%2", 4: "%4"} {
+		if items[index].Disabled || items[index].Preview != paneID || items[index].Value.dispatch.Mode != "switch-pane" || items[index].Value.dispatch.PaneID != paneID {
+			t.Fatalf("agent row %d should select pane %s: %#v", index, paneID, items[index])
+		}
+	}
+	if !strings.Contains(items[0].Label, ansiBold+ansiGreen+"work") || !strings.Contains(items[3].Label, ansiBold+ansiBlue+"docs") {
+		t.Fatalf("session headers should retain configured colors: %q / %q", items[0].Label, items[3].Label)
+	}
+}
+
+func TestAgentTreeWorkdirDropsProjectsPrefix(t *testing.T) {
+	t.Setenv("HOME", "/home/alice")
+	if got := agentTreeWorkdir("/home/alice/projects/tmux-menu"); got != "tmux-menu" {
+		t.Fatalf("agentTreeWorkdir() = %q, want tmux-menu", got)
+	}
+	if got := agentTreeWorkdir("/home/alice/work/tmux-menu"); got != "~/work/tmux-menu" {
+		t.Fatalf("non-project workdir should retain its home-relative path, got %q", got)
+	}
+}
+
+func TestAgentTreeClaudeMarkerOnlyFallsBackToWorkdirName(t *testing.T) {
+	label := stripANSI(agentTreePaneLabel(tmux.Pane{
+		PaneTitle:   "✳",
+		CurrentPath: "/tmp/infrastructure",
+	}, "", agentStatusWaiting, "claude", true))
+
+	if !strings.Contains(label, "✳ infrastructure") || strings.Contains(label, "✳ ✳") {
+		t.Fatalf("Claude marker-only row should use its workdir name: %q", label)
+	}
+}
+
+func TestAgentTreeUsesConfiguredIconsAndColors(t *testing.T) {
+	agentsConfig := config.Default().Agents
+	agentsConfig.Icons.Codex = "C"
+	agentsConfig.Icons.Claude = "L"
+	agentsConfig.Icons.Other = "A"
+	agentsConfig.Icons.Current = "@"
+	agentsConfig.Icons.Branch = "b"
+	agentsConfig.Icons.LastBranch = "z"
+	agentsConfig.Icons.Attention = "a"
+	agentsConfig.Icons.Working = "w"
+	agentsConfig.Icons.Waiting = "i"
+	agentsConfig.Icons.Unknown = "u"
+	agentsConfig.Colors.Codex = "bright_blue"
+	agentsConfig.Colors.Claude = "bright_yellow"
+	agentsConfig.Colors.Other = "bright_magenta"
+	agentsConfig.Colors.Branch = "bright_black"
+	agentsConfig.Colors.Thread = "bright_white"
+	agentsConfig.Colors.Workdir = "white"
+	agentsConfig.Colors.Attention = "bright_red"
+	agentsConfig.Colors.Working = "bright_green"
+	agentsConfig.Colors.Waiting = "yellow"
+	agentsConfig.Colors.Unknown = "dim"
+
+	pane := tmux.Pane{PaneID: "%1", PaneTitle: "thread", CurrentPath: "/tmp/project"}
+	label := agentTreePaneLabelWithConfig(pane, "%1", agentStatusWaiting, "codex", false, agentsConfig)
+	if got := stripANSI(label); got != "  b i C @thread  /tmp/project" {
+		t.Fatalf("custom agent tree label = %q", got)
+	}
+	for _, want := range []string{
+		ansiBrightBlack + "b",
+		ansiYellow + "i",
+		ansiBrightBlue + "C",
+		ansiBold + ansiBrightWhite + "@thread",
+		ansiWhite + "/tmp/project",
+	} {
+		if !strings.Contains(label, want) {
+			t.Fatalf("custom agent tree label missing %q: %q", want, label)
+		}
+	}
+
+	if got := stripANSI(agentTreePaneLabelWithConfig(pane, "", agentStatusWorking, "claude", true, agentsConfig)); !strings.HasPrefix(got, "  z w L thread") {
+		t.Fatalf("custom Claude label = %q", got)
+	}
+	if got := stripANSI(colorAgentIcon("gemini", agentsConfig)); got != "A" {
+		t.Fatalf("custom fallback agent icon = %q", got)
+	}
+	if got := stripANSI(colorAgentStatusWithConfig(agentStatusAttention, agentsConfig)); got != "a" {
+		t.Fatalf("custom attention icon = %q", got)
+	}
+	if got := stripANSI(colorAgentStatusWithConfig(agentStatusUnknown, agentsConfig)); got != "u" {
+		t.Fatalf("custom unknown icon = %q", got)
 	}
 }
 
@@ -292,10 +415,10 @@ func TestManualWindowNamesDoNotChangeAgentRowsOrTitleStatuses(t *testing.T) {
 	}
 	items := agentItemsWithProcessSnapshot([]tmux.Pane{codex, claude}, "", snapshot)
 
-	if got := stripANSI(items[0].Label); strings.Contains(got, "manual-codex") || !strings.Contains(got, "working") {
+	if got := stripANSI(items[0].Label); strings.Contains(got, "manual-codex") || !strings.HasPrefix(got, "● codex") {
 		t.Fatalf("Codex agent row or title-derived status changed: %q", got)
 	}
-	if got := stripANSI(items[1].Label); strings.Contains(got, "manual-claude") || !strings.Contains(got, "waiting") {
+	if got := stripANSI(items[1].Label); strings.Contains(got, "manual-claude") || !strings.HasPrefix(got, "○ claude") {
 		t.Fatalf("Claude agent row or title-derived status changed: %q", got)
 	}
 }
@@ -315,7 +438,7 @@ func TestAgentPaneLabelUsesCodexThreadTitle(t *testing.T) {
 		CurrentCommand: "codex",
 		PaneTitle:      "tmux-menu|add agents title |Working",
 		CurrentPath:    "/tmp/project",
-	}, "", agentStatusWorking, "codex"))
+	}, "", agentStatusWorking, "codex", config.DefaultSessionColor))
 
 	if !strings.Contains(label, "add agents title") {
 		t.Fatalf("label should include thread title: %q", label)
@@ -325,7 +448,7 @@ func TestAgentPaneLabelUsesCodexThreadTitle(t *testing.T) {
 	}
 }
 
-func TestAgentPaneLabelUsesCodexSpinnerThreadTitle(t *testing.T) {
+func TestAgentPaneLabelCompactsCodexSpinnerThreadTitle(t *testing.T) {
 	label := stripANSI(agentPaneLabel(tmux.Pane{
 		SessionName:    "work",
 		WindowIndex:    "1",
@@ -334,13 +457,29 @@ func TestAgentPaneLabelUsesCodexSpinnerThreadTitle(t *testing.T) {
 		CurrentCommand: "node",
 		PaneTitle:      "\u2826 019ea1db-72dc-79c2-8a11-72f1559360a0 | Working",
 		CurrentPath:    "/tmp/project",
-	}, "", agentStatusWorking, "codex"))
+	}, "", agentStatusWorking, "codex", config.DefaultSessionColor))
 
-	if !strings.Contains(label, "019ea1db-72dc-79c2-8a11-72f1559360a0") {
-		t.Fatalf("label should include Codex thread title: %q", label)
+	if !strings.Contains(label, "019ea1db") {
+		t.Fatalf("label should include compact Codex thread title: %q", label)
 	}
-	if strings.Contains(label, "\u2826") || strings.Contains(label, "| Working") {
+	if strings.Contains(label, "\u2826") || strings.Contains(label, "| Working") || strings.Contains(label, "72dc-79c2") {
 		t.Fatalf("label should not include raw spinner/status title: %q", label)
+	}
+}
+
+func TestAgentPaneLabelCompactsCodexCurrentDirUUID(t *testing.T) {
+	label := stripANSI(agentPaneLabel(tmux.Pane{
+		SessionName:    "denti_ai",
+		WindowIndex:    "4",
+		PaneIndex:      "1",
+		PaneID:         "%63",
+		CurrentCommand: "node",
+		PaneTitle:      "019fb87c-abf4-7832-81c9-82e8e8865e64 | Ready",
+		CurrentPath:    "/home/alice/.dotfiles",
+	}, "", agentStatusWaiting, "codex", config.DefaultSessionColor))
+
+	if !strings.Contains(label, "019fb87c") || strings.Contains(label, "abf4-7832") {
+		t.Fatalf("label should include compact Codex current-dir UUID: %q", label)
 	}
 }
 
@@ -353,7 +492,7 @@ func TestAgentPaneLabelDoesNotUseCodexStateAsTitle(t *testing.T) {
 		CurrentCommand: "codex-aarch64-a",
 		PaneTitle:      "Ready",
 		CurrentPath:    "/home/alice/projects/tmux-menu",
-	}, "", agentStatusWaiting, "codex"))
+	}, "", agentStatusWaiting, "codex", config.DefaultSessionColor))
 
 	if strings.Contains(label, "Ready") {
 		t.Fatalf("label should not show Codex state as row title: %q", label)
@@ -375,10 +514,10 @@ func TestCodexPaneTitleStatusOverridesProcessStatus(t *testing.T) {
 
 func TestColorAgentStatus(t *testing.T) {
 	cases := map[agentStatus]string{
-		agentStatusAttention: "attention",
-		agentStatusWorking:   "working",
-		agentStatusWaiting:   "waiting",
-		agentStatusUnknown:   "unknown",
+		agentStatusAttention: "!",
+		agentStatusWorking:   "●",
+		agentStatusWaiting:   "○",
+		agentStatusUnknown:   "?",
 	}
 	for status, want := range cases {
 		if got := stripANSI(colorAgentStatus(status)); got != want {
@@ -391,6 +530,19 @@ func TestColorAgentStatusHighlightsAttention(t *testing.T) {
 	got := colorAgentStatus(agentStatusAttention)
 	if !strings.Contains(got, ansiRed) || !strings.Contains(got, ansiBold) {
 		t.Fatalf("attention status should be bold red, got %q", got)
+	}
+}
+
+func TestColorAgentStatusUsesStateColors(t *testing.T) {
+	cases := map[agentStatus]string{
+		agentStatusWorking: ansiGreen,
+		agentStatusWaiting: ansiYellow,
+		agentStatusUnknown: ansiDim,
+	}
+	for status, want := range cases {
+		if got := colorAgentStatus(status); !strings.Contains(got, want) {
+			t.Fatalf("colorAgentStatus(%q) = %q, want color %q", status, got, want)
+		}
 	}
 }
 
@@ -410,17 +562,120 @@ func TestAgentRowsShowAgentNameBeforeSessionAndHideForegroundCommand(t *testing.
 	}
 	codex := stripANSI(items[0].Label)
 	claude := stripANSI(items[1].Label)
-	if !strings.HasPrefix(codex, "codex  work/1.1") || strings.Contains(codex, "node") {
+	if !strings.HasPrefix(codex, "○ codex work") || strings.Contains(codex, "work/1.1") || strings.Contains(codex, "node") {
 		t.Fatalf("unexpected Codex row: %q", codex)
 	}
-	if !strings.HasPrefix(claude, "claude  work/2.1") || strings.Contains(claude, "2.1.217") {
+	if !strings.HasPrefix(claude, "● claude work") || strings.Contains(claude, "work/2.1") || strings.Contains(claude, "2.1.217") {
 		t.Fatalf("unexpected Claude row: %q", claude)
 	}
-	if !strings.Contains(items[0].Label, ansiGreen) {
-		t.Fatalf("Codex name should be green: %q", items[0].Label)
+	if !strings.Contains(items[0].Label, ansiBlue) {
+		t.Fatalf("Codex name should be blue: %q", items[0].Label)
 	}
 	if !strings.Contains(items[1].Label, ansiOrange) {
 		t.Fatalf("Claude name should be orange: %q", items[1].Label)
+	}
+}
+
+func TestAgentRowCompactsUUIDSessionAndMarksCurrentAgent(t *testing.T) {
+	label := stripANSI(agentPaneLabel(tmux.Pane{
+		SessionName: "019fbdaa-d18a-7a61-9c2e-4f6e5863c787",
+		WindowIndex: "4",
+		PaneIndex:   "1",
+		PaneID:      "%1",
+		PaneTitle:   "Ready",
+		CurrentPath: "/tmp/project",
+	}, "%1", agentStatusWaiting, "codex", config.DefaultSessionColor))
+
+	if !strings.HasPrefix(label, "○ codex* 019fbdaa") {
+		t.Fatalf("unexpected compact current-agent row: %q", label)
+	}
+	if strings.Contains(label, "current") || strings.Contains(label, "d18a-7a61") || strings.Contains(label, "/4.1") {
+		t.Fatalf("row should omit the old marker and UUID tail: %q", label)
+	}
+}
+
+func TestAgentRowUsesConfiguredSessionColor(t *testing.T) {
+	pane := tmux.Pane{
+		SessionName: "clos", SessionID: "$1", WindowIndex: "3", PaneIndex: "1",
+		PaneID: "%1", PanePID: "100", CurrentCommand: "codex", PaneTitle: "Ready",
+	}
+	items := agentItemsWithProcessSnapshotAndSessionColors([]tmux.Pane{pane}, "", processSnapshot{}, map[string]string{"$1": "red"})
+
+	if got := stripANSI(items[0].Label); !strings.HasPrefix(got, "○ codex clos") || strings.Contains(got, "clos/3.1") {
+		t.Fatalf("unexpected agent row: %q", got)
+	}
+	if !strings.Contains(items[0].Label, ansiBold+ansiRed+"clos") {
+		t.Fatalf("session name should be bold red: %q", items[0].Label)
+	}
+}
+
+func TestANSIColorSupportsAllConfiguredSessionColors(t *testing.T) {
+	want := map[string]string{
+		"default":        ansiDefault,
+		"black":          ansiBlack,
+		"red":            ansiRed,
+		"green":          ansiGreen,
+		"yellow":         ansiYellow,
+		"blue":           ansiBlue,
+		"magenta":        ansiMagenta,
+		"cyan":           ansiCyan,
+		"white":          ansiWhite,
+		"bright_black":   ansiBrightBlack,
+		"bright_red":     ansiBrightRed,
+		"bright_green":   ansiBrightGreen,
+		"bright_yellow":  ansiBrightYellow,
+		"bright_blue":    ansiBrightBlue,
+		"bright_magenta": ansiBrightMagenta,
+		"bright_cyan":    ansiBrightCyan,
+		"bright_white":   ansiBrightWhite,
+		"orange":         ansiOrange,
+	}
+	for color, code := range want {
+		if got := ansiColor(color); got != code {
+			t.Fatalf("ansiColor(%q) = %q, want %q", color, got, code)
+		}
+	}
+}
+
+func TestLoadAgentSessionColorsUsesEachSessionRoot(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	roots := make(map[string]string)
+	for _, session := range []struct {
+		name  string
+		color string
+	}{
+		{name: "clos", color: "red"},
+		{name: "denti_ai", color: "green"},
+	} {
+		root := filepath.Join(t.TempDir(), session.name)
+		if err := os.MkdirAll(root, 0755); err != nil {
+			t.Fatal(err)
+		}
+		contents := fmt.Sprintf("[session]\ncolor = %q\n", session.color)
+		if err := os.WriteFile(filepath.Join(root, ".tmux-menu.conf"), []byte(contents), 0644); err != nil {
+			t.Fatal(err)
+		}
+		roots[session.name] = root
+	}
+
+	panes := []tmux.Pane{
+		{SessionName: "clos", SessionID: "$1", SessionPath: roots["clos"]},
+		{SessionName: "denti_ai", SessionID: "$2", SessionPath: roots["denti_ai"]},
+	}
+	colors, err := loadAgentSessionColors(panes, config.DefaultSessionColor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if colors["$1"] != "red" || colors["$2"] != "green" {
+		t.Fatalf("session colors = %#v", colors)
+	}
+}
+
+func TestShortUUIDLeavesNonUUIDNamesUnchanged(t *testing.T) {
+	for _, name := range []string{"work", "denti_ai", "019fbdaa-not-a-uuid"} {
+		if got := shortUUID(name); got != name {
+			t.Fatalf("shortUUID(%q) = %q", name, got)
+		}
 	}
 }
 
@@ -690,20 +945,14 @@ func TestStatusItemsListFilesBySubdirAndOpenEditorInPane(t *testing.T) {
 	}
 }
 
-func TestStatusHeaderShowsBoardHelp(t *testing.T) {
+func TestStatusFooterShowsBoardHelpAndNavigation(t *testing.T) {
 	cfg := config.Default()
 	cfg.Status.Statuses = []string{"backlog", "doing", "done"}
 
-	got := statusHeader(cfg)
-	want := "BACKLOG / DOING / DONE | Space preview | Enter edit | Ctrl-C cancel"
+	got := statusFooter(cfg)
+	want := "BACKLOG / DOING / DONE | Space preview | Enter edit | Ctrl-C cancel\n" + viewSwitchHelp
 	if got != want {
-		t.Fatalf("statusHeader() = %q, want %q", got, want)
-	}
-
-	cfg.Picker.ShowHelp = true
-	got = statusHeader(cfg)
-	if !strings.Contains(got, want) || !strings.Contains(got, viewSwitchHelp) {
-		t.Fatalf("status header should include board help and view switch help, got %q", got)
+		t.Fatalf("statusFooter() = %q, want %q", got, want)
 	}
 }
 
@@ -1178,15 +1427,37 @@ func TestViewModeForKey(t *testing.T) {
 	}
 }
 
-func TestViewSwitchHeaderForConfig(t *testing.T) {
-	cfg := config.Default()
-	if got := viewSwitchHeaderForConfig(cfg); got != "" {
-		t.Fatalf("hidden helper header = %q, want empty", got)
+func TestTabViewModeUsesConfiguredOrder(t *testing.T) {
+	order := []string{"agents", "palette", "links"}
+	cases := []struct {
+		current string
+		key     string
+		want    string
+	}{
+		{"agents", "tab", "palette"},
+		{"links", "tab", "agents"},
+		{"agents", "btab", "links"},
+		{"palette", "btab", "agents"},
+		{"status", "tab", "agents"},
+		{"status", "btab", "links"},
+		{"agents", "ctrl-x", ""},
 	}
+	for _, tc := range cases {
+		if got := tabViewMode(tc.current, tc.key, order); got != tc.want {
+			t.Fatalf("tabViewMode(%q, %q) = %q, want %q", tc.current, tc.key, got, tc.want)
+		}
+	}
+}
 
-	cfg.Picker.ShowHelp = true
-	if got := viewSwitchHeaderForConfig(cfg); got != viewSwitchHelp {
-		t.Fatalf("visible helper header = %q, want %q", got, viewSwitchHelp)
+func TestViewSwitchFooter(t *testing.T) {
+	if got := viewSwitchFooter(); got != viewSwitchHelp {
+		t.Fatalf("navigation footer = %q, want %q", got, viewSwitchHelp)
+	}
+}
+
+func TestPickerPreviewWindowUsesConfiguredWidth(t *testing.T) {
+	if got := pickerPreviewWindow("45%", "wrap", "follow"); got != "right:45%:wrap:follow" {
+		t.Fatalf("pickerPreviewWindow() = %q", got)
 	}
 }
 

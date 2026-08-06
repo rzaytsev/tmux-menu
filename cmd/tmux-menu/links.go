@@ -25,7 +25,7 @@ func selectLinks(ctx context.Context) (picker.Result[menuItem], error) {
 	if err != nil {
 		return picker.Result[menuItem]{}, err
 	}
-	found := linkscan.Extract(scrollback, rt.OriginPath)
+	found := linkscan.Extract(scrollback, rt.OriginPath, cfg.Links.URLSchemes)
 	items := make([]picker.Item[menuItem], 0, len(found))
 	for _, item := range found {
 		items = append(items, picker.Item[menuItem]{
@@ -33,7 +33,7 @@ func selectLinks(ctx context.Context) (picker.Result[menuItem], error) {
 			Value: linkMenuItem(item, rt.OriginPath, cfg),
 		})
 	}
-	return picker.SelectWithExpect(ctx, "links> ", items, linkExpectKeys(cfg.Links.Alternate), linkHeaderForConfig(cfg))
+	return picker.SelectWithExpect(ctx, "links> ", items, linkExpectKeys(cfg.Links.Alternate), linkFooterForConfig(cfg))
 }
 
 func linkMenuItem(item linkscan.Item, workingDir string, cfg config.Config) menuItem {
@@ -62,16 +62,16 @@ func containsLinkExpectKey(keys []string, want string) bool {
 	return false
 }
 
-func linkHeaderForConfig(cfg config.Config) string {
-	header := viewSwitchHeaderForConfig(cfg)
+func linkFooterForConfig(cfg config.Config) string {
+	footer := viewSwitchFooter()
 	if !cfg.Picker.ShowHelp || strings.TrimSpace(cfg.Links.Alternate.Key) == "" {
-		return header
+		return footer
 	}
 	altHelp := cfg.Links.Alternate.Key + " alternate open"
-	if header == "" {
+	if footer == "" {
 		return altHelp
 	}
-	return header + " | " + altHelp
+	return altHelp + "\n" + footer
 }
 
 func linkLabel(item linkscan.Item) string {
