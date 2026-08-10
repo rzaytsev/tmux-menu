@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -49,6 +50,16 @@ func run(ctx context.Context, args []string) error {
 		return runPickerLoop(ctx, "bookmarks")
 	case "status":
 		return runPickerLoop(ctx, "status")
+	case "validate-config":
+		paths := args[1:]
+		if len(paths) == 0 {
+			paths = []string{config.DefaultPath()}
+		}
+		if _, err := config.LoadStrict(paths...); err != nil {
+			return err
+		}
+		fmt.Printf("config valid: %s\n", strings.Join(paths, ", "))
+		return nil
 	case "sample-config":
 		fmt.Print(config.Sample())
 		return nil
@@ -77,6 +88,7 @@ Usage:
   tmux-menu links
   tmux-menu bookmarks
   tmux-menu status
+  tmux-menu validate-config [config ...]
   tmux-menu sample-config
 `)
 	return nil
@@ -243,6 +255,24 @@ func runPickerLoop(ctx context.Context, mode string) error {
 		}
 		return dispatch(ctx, dispatchForResult(result))
 	}
+}
+
+func runStatusCommand(ctx context.Context, command string, rt runtimeContext) error {
+	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", command)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = append(os.Environ(),
+		"TMUX_MENU_ORIGIN_PANE="+rt.OriginPane,
+		"TMUX_MENU_ORIGIN_PATH="+rt.OriginPath,
+		"TMUX_MENU_SESSION_ID="+rt.SessionID,
+		"TMUX_MENU_SESSION_NAME="+rt.SessionName,
+		"TMUX_MENU_SESSION_PATH="+rt.SessionPath,
+	)
+	if rt.SessionPath != "" {
+		cmd.Dir = rt.SessionPath
+	}
+	return cmd.Run()
 }
 
 func dispatchForResult(result picker.Result[menuItem]) action.Dispatch {

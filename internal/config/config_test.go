@@ -170,6 +170,7 @@ mode = "popup"
 pane_side = "above"
 
 [status]
+command = 'exec python3 "$TMUX_MENU_SESSION_PATH/scripts/todo.py"'
 status_dir = ["./work-items", "./docs"]
 statuses = ["backlog", "doing", "done"]
 preview_command = "bat --style=plain"
@@ -256,9 +257,60 @@ session = "work"
 		t.Fatalf("unexpected bookmarks config: %#v", cfg.Bookmarks)
 	}
 	if strings.Join(cfg.Status.StatusDirs, ",") != "./work-items,./docs" || strings.Join(cfg.Status.Statuses, ",") != "backlog,doing,done" ||
+		cfg.Status.Command != `exec python3 "$TMUX_MENU_SESSION_PATH/scripts/todo.py"` ||
 		cfg.Status.PreviewCommand != "bat --style=plain" ||
 		strings.Join(cfg.Status.IgnorePatterns, ",") != ".gitkeep,*.tmp" {
 		t.Fatalf("unexpected status config: %#v", cfg.Status)
+	}
+}
+
+func TestLoadStrictRejectsUnknownTomlKeys(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(`
+[[commands]]
+title = "Notes"
+mode = "window"
+cmd = "nvim notes.md"
+widown_name = "notes"
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadStrict(path)
+	if err == nil || !strings.Contains(err.Error(), "commands.widown_name") {
+		t.Fatalf("LoadStrict() error = %v, want unknown commands.widown_name", err)
+	}
+}
+
+func TestLoadStrictRejectsUnknownJSONKeys(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"popup":{"widht":"80%"}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadStrict(path)
+	if err == nil || !strings.Contains(err.Error(), "widht") {
+		t.Fatalf("LoadStrict() error = %v, want unknown widht", err)
+	}
+}
+
+func TestLoadStrictOverlaysMultipleValidFiles(t *testing.T) {
+	dir := t.TempDir()
+	global := filepath.Join(dir, "global.toml")
+	local := filepath.Join(dir, "local.toml")
+	if err := os.WriteFile(global, []byte("[session]\ncolor = \"cyan\"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(local, []byte("[status]\ncommand = \"python3 scripts/todo.py\"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadStrict(global, local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Session.Color != "cyan" || cfg.Status.Command != "python3 scripts/todo.py" {
+		t.Fatalf("unexpected strict overlay: %#v", cfg)
 	}
 }
 

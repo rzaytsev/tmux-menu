@@ -1,7 +1,7 @@
 BIN := bin/tmux-menu
 PREFIX ?= $(HOME)/.local
 
-.PHONY: build test race vet validate coverage install sample-config config run palette agents tools projects links bookmarks status status-new clean
+.PHONY: build test race vet validate validate-config coverage install sample-config config run palette agents tools projects links bookmarks status status-new clean
 
 build:
 	go build -o $(BIN) ./cmd/tmux-menu
@@ -15,7 +15,10 @@ race:
 vet:
 	go vet ./...
 
-validate: test race vet build sample-config
+validate: test race vet build sample-config validate-config
+
+validate-config:
+	go run ./cmd/tmux-menu validate-config examples/config.toml
 
 coverage:
 	go test -coverprofile=coverage.out ./...

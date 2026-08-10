@@ -21,7 +21,7 @@ Work directly and keep changes small. This is a local tmux utility, not a framew
 - `projects`: lists one-level directories under `projects.roots`, creates/switches tmux sessions natively, and shows whether the configured bootstrap file exists.
 - `links`: captures origin pane scrollback, extracts URL schemes configured by `links.url_schemes` (default HTTP, HTTPS, Slack, and Telegram), copies selected targets, opens file refs through configured `links.open`, opens URLs with `open`, and supports a configured alternate opener.
 - `bookmarks`: scans inline Markdown links from `bookmarks.dirs` in configured order, default `["~/notes/projects/{project}", "~/projects/{project}"]`, skips path parts matching `bookmarks.ignore_patterns` defaulting to `.git`, `.tmp`, and `vendor`, opens HTTP(S) links with `open`, and opens local file links in a right-side editor pane.
-- `status`: shows a task board from configured `status.status_dir` roots, default `["./todo"]`, and configured `status.statuses` subdirs, default `["new", "doing", "done"]`; rows show status, filename-derived title with `-`/`_` as spaces, and `summary: ...`, with Space toggling full preview and Enter opening the file in an editor split pane.
+- `status`: runs optional project-local `status.command` from the tmux session root, or shows a task board from configured `status.status_dir` roots, default `["./todo"]`, and configured `status.statuses` subdirs, default `["new", "doing", "done"]`; rows show status, filename-derived title with `-`/`_` as spaces, and `summary: ...`, with Space toggling full preview and Enter opening the file in an editor split pane.
 - Picker views support Tab/Shift-Tab through configured `picker.tab_order` and `Alt-1` main, `Alt-2` agents, `Alt-3` tools, `Alt-4` projects, `Alt-5` status, `Alt-6` bookmarks through `fzf --expect`; navigation shortcuts are always shown in a persistent footer, while `picker.show_help` controls optional view-specific help.
 - Global config path: `~/.tmux-menu.conf`; local `.tmux-menu.conf` overlays in the session root and origin pane directory can add commands/quick dirs or replace scalar/list settings.
 
@@ -47,6 +47,7 @@ Work directly and keep changes small. This is a local tmux utility, not a framew
 - Relative quick-dir paths resolve against `#{session_path}`; use `quick_dirs[].session` for project-specific entries, and `quick_dirs[].command` to paste `cd <path> && <command>`.
 - In popup-launched views, use `TMUX_MENU_ORIGIN_PANE` and `TMUX_MENU_ORIGIN_PATH` when inspecting the caller pane.
 - Status `status_dir` values are arrays and are resolved from `TMUX_MENU_SESSION_PATH` / `#{session_path}`, with origin path only as fallback.
+- A non-empty `status.command` replaces the directory picker and runs from the tmux session root with the `TMUX_MENU_*` runtime context.
 - Status `statuses` controls the visible status subdirectories and display order; directories not listed, such as `old`, are hidden.
 - Status previews use `fzf --preview` hidden by default and toggled with Space; `preview_command = "glow"` appends the selected file path, while commands containing `{}` replace that placeholder with the file path.
 - Status item preview fields must pass raw file paths to `fzf`; do not pre-shell-quote them.
@@ -66,6 +67,7 @@ Run:
 GOCACHE=/tmp/tmux-menu-go-build make test
 GOCACHE=/tmp/tmux-menu-go-build make build
 GOCACHE=/tmp/tmux-menu-go-build make sample-config
+GOCACHE=/tmp/tmux-menu-go-build make validate-config
 ```
 
 Do not run interactive `make palette`, `make agents`, `make tools`, `make projects`, `make links`, `make bookmarks`, or `make status` unless the user explicitly wants the popup opened.

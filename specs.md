@@ -36,6 +36,7 @@ tmux-menu projects
 tmux-menu links
 tmux-menu bookmarks
 tmux-menu status
+tmux-menu validate-config [config ...]
 tmux-menu sample-config
 ```
 
@@ -328,7 +329,13 @@ tmux pane split to the right of the origin pane.
 
 ## Status Mode
 
-`status` shows a lane-ordered task board from each `status.status_dir`. Relative
+When `status.command` is non-empty, `status` runs that shell command from the
+tmux session root with the `TMUX_MENU_*` context variables and does not open the
+directory picker. This lets project overlays supply a task workflow with a
+different storage model.
+
+Otherwise, `status` shows a lane-ordered task board from each
+`status.status_dir`. Relative
 paths resolve against the tmux session root (`#{session_path}`), with the origin
 pane path as a fallback when the session root is unavailable. The default root is
 `["./todo"]`.
@@ -440,6 +447,7 @@ mode = "pane"
 pane_side = "right"
 
 [status]
+# command = 'python3 "$TMUX_MENU_SESSION_PATH/scripts/todo.py"'
 status_dir = ["./todo"]
 statuses = ["new", "doing", "done"]
 preview_command = "glow"
@@ -458,6 +466,7 @@ Minimum checks:
 go test ./...
 go build ./cmd/tmux-menu
 ./tmux-menu sample-config
+./tmux-menu validate-config ~/.tmux-menu.conf
 ```
 
 Preferred local commands:

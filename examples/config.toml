@@ -134,6 +134,8 @@ mode = "pane"
 pane_side = "right"
 
 [status]
+# Optional command replacing the directory-based status picker for this config.
+# command = 'python3 "$TMUX_MENU_SESSION_PATH/scripts/todo.py"'
 # Relative paths resolve from the current tmux session root.
 status_dir = ["./todo"]
 # Status subdirectories shown under each status_dir, in display order.

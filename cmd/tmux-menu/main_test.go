@@ -34,6 +34,114 @@ func TestCleanPaneTitleDropsLocalUserHostPrefix(t *testing.T) {
 	}
 }
 
+func TestRunValidateConfigRejectsUnknownKeys(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[popup]\nwidht = \"80%\"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := run(context.Background(), []string{"validate-config", path})
+	if err == nil || !strings.Contains(err.Error(), "popup.widht") {
+		t.Fatalf("validate-config error = %v, want unknown popup.widht", err)
+	}
+}
+
+func TestRunValidateConfigAcceptsLayeredConfigs(t *testing.T) {
+	dir := t.TempDir()
+	global := filepath.Join(dir, "global.toml")
+	local := filepath.Join(dir, "local.toml")
+	if err := os.WriteFile(global, []byte("[session]\ncolor = \"cyan\"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(local, []byte("[status]\ncommand = \"python3 scripts/todo.py\"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := run(context.Background(), []string{"validate-config", global, local}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunStatusCommandExportsRuntimeContext(t *testing.T) {
+	root := t.TempDir()
+	rt := runtimeContext{
+		OriginPane:  "%7",
+		OriginPath:  filepath.Join(root, "subdir"),
+		SessionID:   "$4",
+		SessionName: "project",
+		SessionPath: root,
+	}
+	command := fmt.Sprintf(
+		`test "$TMUX_MENU_ORIGIN_PANE" = "%%7" && test "$TMUX_MENU_SESSION_PATH" = %s`,
+		shellquote.Quote(root),
+	)
+
+	if err := runStatusCommand(context.Background(), command, rt); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSelectStatusRunsConfiguredCommandInsteadOfPicker(t *testing.T) {
+	home := t.TempDir()
+	root := t.TempDir()
+	marker := filepath.Join(root, "status-command.txt")
+	configText := fmt.Sprintf(
+		"[status]\ncommand = '''printf '%%s\\n%%s\\n' \"$TMUX_MENU_ORIGIN_PANE\" \"$PWD\" > %s'''\n",
+		shellquote.Quote(marker),
+	)
+	if err := os.WriteFile(filepath.Join(home, ".tmux-menu.conf"), []byte(configText), 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("TMUX_MENU_ORIGIN_PANE", "%7")
+	t.Setenv("TMUX_MENU_ORIGIN_PATH", root)
+	t.Setenv("TMUX_MENU_SESSION_ID", "$4")
+	t.Setenv("TMUX_MENU_SESSION_NAME", "project")
+	t.Setenv("TMUX_MENU_SESSION_PATH", root)
+
+	result, err := selectStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Selected {
+		t.Fatal("configured status command should bypass the picker")
+	}
+	contents, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(contents), "%7\n"+resolvedRoot+"\n"; got != want {
+		t.Fatalf("status command output = %q, want %q", got, want)
+	}
+}
+
+func TestSelectStatusPropagatesConfiguredCommandFailure(t *testing.T) {
+	home := t.TempDir()
+	root := t.TempDir()
+	if err := os.WriteFile(
+		filepath.Join(home, ".tmux-menu.conf"),
+		[]byte("[status]\ncommand = \"exit 23\"\n"),
+		0644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("TMUX_MENU_ORIGIN_PANE", "%7")
+	t.Setenv("TMUX_MENU_ORIGIN_PATH", root)
+	t.Setenv("TMUX_MENU_SESSION_ID", "$4")
+	t.Setenv("TMUX_MENU_SESSION_NAME", "project")
+	t.Setenv("TMUX_MENU_SESSION_PATH", root)
+
+	_, err := selectStatus(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "exit status 23") {
+		t.Fatalf("selectStatus() error = %v, want exit status 23", err)
+	}
+}
+
 func TestCleanPaneTitleDropsShortLocalHostPrefix(t *testing.T) {
 	t.Setenv("USER", "alice")
 	got := cleanPaneTitle("alice@workstation:~/projects/tmux-menu")

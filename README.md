@@ -47,6 +47,7 @@ tmux-menu popup projects
 tmux-menu popup links
 tmux-menu popup bookmarks
 tmux-menu popup status
+tmux-menu validate-config ~/.tmux-menu.conf
 ```
 
 Suggested tmux binding:
@@ -70,4 +71,5 @@ Full usage, configuration, examples, and use cases are in
 GOCACHE=/tmp/tmux-menu-go-build make test
 GOCACHE=/tmp/tmux-menu-go-build make build
 GOCACHE=/tmp/tmux-menu-go-build make sample-config
+GOCACHE=/tmp/tmux-menu-go-build make validate-config
 ```

@@ -40,6 +40,7 @@ tmux-menu projects
 tmux-menu links
 tmux-menu bookmarks
 tmux-menu status
+tmux-menu validate-config ~/.tmux-menu.conf
 tmux-menu sample-config
 ```
 
@@ -90,6 +91,14 @@ Generate a starting config:
 
 ```sh
 tmux-menu sample-config > ~/.tmux-menu.conf
+```
+
+Validate one config or a layered global/project pair. Validation rejects
+misspelled or otherwise unknown keys instead of silently ignoring them:
+
+```sh
+tmux-menu validate-config ~/.tmux-menu.conf
+tmux-menu validate-config ~/.tmux-menu.conf /path/to/project/.tmux-menu.conf
 ```
 
 The repository copy is [examples/config.toml](../examples/config.toml).
@@ -398,6 +407,8 @@ relative to the Markdown source file and use `[bookmarks.open]`.
 
 `status` shows task files under configured roots.
 
+- `command`: optional shell command that replaces the directory-based picker;
+  it runs from the tmux session root with the `TMUX_MENU_*` context variables.
 - `status_dir`: one or more roots, usually `["./todo"]`.
 - `statuses`: visible subdirectories and display order.
 - `preview_command`: command for fzf preview. If it contains `{}`, the file
@@ -480,6 +491,13 @@ todo/
   done/
 ```
 
+Projects with a different task model can replace that picker locally:
+
+```toml
+[status]
+command = 'python3 "$TMUX_MENU_SESSION_PATH/scripts/todo.py"'
+```
+
 Each file can include:
 
 ```text
@@ -494,6 +512,7 @@ Targeted checks:
 GOCACHE=/tmp/tmux-menu-go-build make test
 GOCACHE=/tmp/tmux-menu-go-build make build
 GOCACHE=/tmp/tmux-menu-go-build make sample-config
+GOCACHE=/tmp/tmux-menu-go-build make validate-config
 ```
 
 Broader local check:

@@ -1,11 +1,14 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -117,6 +120,7 @@ type BookmarksConfig struct {
 }
 
 type StatusConfig struct {
+	Command        string     `json:"command" toml:"command"`
 	StatusDirs     StringList `json:"status_dir" toml:"status_dir"`
 	Statuses       StringList `json:"statuses" toml:"statuses"`
 	PreviewCommand string     `json:"preview_command" toml:"preview_command"`
@@ -266,7 +270,7 @@ func Load(path string) (Config, error) {
 	if path == "" {
 		return LoadForContext("", "")
 	}
-	if err := loadConfigFile(path, &cfg); err != nil {
+	if err := loadConfigFile(path, &cfg, false); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return cfg, nil
 		}
@@ -280,10 +284,25 @@ func Load(path string) (Config, error) {
 func LoadForContext(currentDir string, sessionRoot string) (Config, error) {
 	cfg := Default()
 	for _, path := range configPaths(currentDir, sessionRoot) {
-		if err := loadConfigFile(path, &cfg); err != nil {
+		if err := loadConfigFile(path, &cfg, false); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
+			return Config{}, err
+		}
+	}
+	normalizeConfig(&cfg)
+	applyDefaults(&cfg)
+	return cfg, Validate(cfg)
+}
+
+func LoadStrict(paths ...string) (Config, error) {
+	if len(paths) == 0 {
+		paths = []string{DefaultPath()}
+	}
+	cfg := Default()
+	for _, path := range paths {
+		if err := loadConfigFile(path, &cfg, true); err != nil {
 			return Config{}, err
 		}
 	}
@@ -319,14 +338,29 @@ func configPaths(currentDir string, sessionRoot string) []string {
 	return paths
 }
 
-func loadConfigFile(path string, cfg *Config) error {
+func loadConfigFile(path string, cfg *Config, strict bool) error {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
 	if filepath.Ext(path) == ".json" {
 		var next Config
-		if err := json.Unmarshal(b, &next); err != nil {
+		if !strict {
+			if err := json.Unmarshal(b, &next); err != nil {
+				return fmt.Errorf("parse %s: %w", path, err)
+			}
+			overlayAll(cfg, next)
+			return nil
+		}
+		decoder := json.NewDecoder(bytes.NewReader(b))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&next); err != nil {
+			return fmt.Errorf("parse %s: %w", path, err)
+		}
+		if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+			if err == nil {
+				err = errors.New("multiple JSON values")
+			}
 			return fmt.Errorf("parse %s: %w", path, err)
 		}
 		overlayAll(cfg, next)
@@ -336,6 +370,17 @@ func loadConfigFile(path string, cfg *Config) error {
 	meta, err := toml.Decode(string(b), &next)
 	if err != nil {
 		return fmt.Errorf("parse %s: %w", path, err)
+	}
+	if strict {
+		unknown := meta.Undecoded()
+		if len(unknown) > 0 {
+			keys := make([]string, 0, len(unknown))
+			for _, key := range unknown {
+				keys = append(keys, key.String())
+			}
+			sort.Strings(keys)
+			return fmt.Errorf("validate %s: unknown config key(s): %s", path, strings.Join(keys, ", "))
+		}
 	}
 	overlayDefined(cfg, next, meta)
 	return nil
@@ -460,6 +505,9 @@ func overlayDefined(dst *Config, src Config, meta toml.MetaData) {
 	}
 	if meta.IsDefined("status", "status_dir") {
 		dst.Status.StatusDirs = src.Status.StatusDirs
+	}
+	if meta.IsDefined("status", "command") {
+		dst.Status.Command = src.Status.Command
 	}
 	if meta.IsDefined("status", "statuses") {
 		dst.Status.Statuses = src.Status.Statuses
@@ -1016,6 +1064,8 @@ mode = "pane"
 pane_side = "right"
 
 [status]
+# Optional command replacing the directory-based status picker for this config.
+# command = 'python3 "$TMUX_MENU_SESSION_PATH/scripts/todo.py"'
 # Relative paths resolve from the current tmux session root.
 status_dir = ["./todo"]
 # Status subdirectories shown under each status_dir, in display order.
