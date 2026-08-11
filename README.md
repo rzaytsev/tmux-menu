@@ -5,6 +5,8 @@ Small Go command palette for tmux.
 `tmux-menu` opens tmux pickers through `fzf` so you can jump between sessions,
 panes, agent panes, project directories, links, bookmarks, tools, and task
 files without leaving the keyboard.
+Status can also act as a cross-project radar: configured session reporters
+produce urgency-sorted rows with a fixed right-side block preview.
 Manually named tmux windows are shown alongside each pane's own title.
 The agents picker groups panes under display-only session headers and previews
 the selected pane's latest scrollback lines, with popup and preview sizing

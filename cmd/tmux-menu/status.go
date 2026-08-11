@@ -19,6 +19,9 @@ func selectStatus(ctx context.Context) (picker.Result[menuItem], error) {
 	if err != nil {
 		return picker.Result[menuItem]{}, err
 	}
+	if len(cfg.Status.Targets) > 0 {
+		return selectStatusRadar(ctx, cfg, rt)
+	}
 	if strings.TrimSpace(cfg.Status.Command) != "" {
 		return picker.Result[menuItem]{}, runStatusCommand(ctx, cfg.Status.Command, rt)
 	}

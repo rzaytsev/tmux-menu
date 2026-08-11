@@ -60,6 +60,9 @@ func TestLoadMissingUsesDefaults(t *testing.T) {
 	if got := strings.Join(cfg.Status.IgnorePatterns, ","); got != ".gitkeep" {
 		t.Fatalf("unexpected status ignore patterns: %#v", cfg.Status.IgnorePatterns)
 	}
+	if cfg.Status.ReportTimeout != "3s" || len(cfg.Status.Targets) != 0 {
+		t.Fatalf("unexpected status radar defaults: %#v", cfg.Status)
+	}
 	if got := strings.Join(cfg.Bookmarks.Dirs, ","); got != "~/notes/projects/{project},~/projects/{project}" {
 		t.Fatalf("unexpected bookmark dirs: %#v", cfg.Bookmarks.Dirs)
 	}
@@ -175,6 +178,12 @@ status_dir = ["./work-items", "./docs"]
 statuses = ["backlog", "doing", "done"]
 preview_command = "bat --style=plain"
 ignore_patterns = [".gitkeep", "*.tmp"]
+report_timeout = "5s"
+
+[[status.targets]]
+title = "Work"
+session = "work"
+command = "./scripts/status-report"
 
 [status.open]
 mode = "pane"
@@ -258,6 +267,8 @@ session = "work"
 	}
 	if strings.Join(cfg.Status.StatusDirs, ",") != "./work-items,./docs" || strings.Join(cfg.Status.Statuses, ",") != "backlog,doing,done" ||
 		cfg.Status.Command != `exec python3 "$TMUX_MENU_SESSION_PATH/scripts/todo.py"` ||
+		cfg.Status.ReportTimeout != "5s" || len(cfg.Status.Targets) != 1 || cfg.Status.Targets[0].Title != "Work" ||
+		cfg.Status.Targets[0].Session != "work" || cfg.Status.Targets[0].Command != "./scripts/status-report" ||
 		cfg.Status.PreviewCommand != "bat --style=plain" ||
 		strings.Join(cfg.Status.IgnorePatterns, ",") != ".gitkeep,*.tmp" {
 		t.Fatalf("unexpected status config: %#v", cfg.Status)
@@ -335,6 +346,11 @@ url_schemes = ["http", "https"]
 [status]
 status_dir = ["./todo"]
 preview_command = "glow"
+report_timeout = "4s"
+
+[[status.targets]]
+session = "global"
+command = "./global-report"
 
 [bookmarks]
 dirs = ["~/notes"]
@@ -357,6 +373,11 @@ url_schemes = ["slack", "tg"]
 status_dir = ["./session-todo", "./docs"]
 statuses = ["backlog", "doing"]
 ignore_patterns = [".gitkeep", "*.tmp"]
+report_timeout = "2s"
+
+[[status.targets]]
+session = "session"
+command = "./session-report"
 
 [bookmarks]
 dirs = ["~/projects/work", "~/notes"]
@@ -401,6 +422,9 @@ cmd = "echo local"
 	}
 	if got := strings.Join(cfg.Status.IgnorePatterns, ","); got != ".gitkeep,*.tmp" {
 		t.Fatalf("ignore patterns = %#v", cfg.Status.IgnorePatterns)
+	}
+	if cfg.Status.ReportTimeout != "2s" || len(cfg.Status.Targets) != 1 || cfg.Status.Targets[0].Title != "session" {
+		t.Fatalf("status radar should be replaced by session config: %#v", cfg.Status)
 	}
 	if got := strings.Join(cfg.Bookmarks.Dirs, ","); got != "~/projects/work,~/notes" {
 		t.Fatalf("bookmark dirs = %#v", cfg.Bookmarks.Dirs)
@@ -603,6 +627,8 @@ func TestSampleConfigIsToml(t *testing.T) {
 		`statuses = ["new", "doing", "done"]`,
 		`preview_command = "glow"`,
 		`ignore_patterns = [".gitkeep"]`,
+		`report_timeout = "3s"`,
+		`# [[status.targets]]`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("sample config missing %q:\n%s", want, got)
@@ -618,6 +644,28 @@ func TestValidateRejectsBadQuickDir(t *testing.T) {
 	cfg.QuickDirs = []QuickDir{{Title: "missing path"}}
 	if err := Validate(cfg); err == nil {
 		t.Fatal("expected validation error")
+	}
+}
+
+func TestValidateRejectsBadStatusRadarConfig(t *testing.T) {
+	cfg := Default()
+	cfg.Status.ReportTimeout = "never"
+	if err := Validate(cfg); err == nil || !strings.Contains(err.Error(), "positive duration") {
+		t.Fatalf("Validate() error = %v, want bad report timeout", err)
+	}
+
+	cfg = Default()
+	cfg.Status.Targets = []StatusTarget{{Session: "work"}}
+	if err := Validate(cfg); err == nil || !strings.Contains(err.Error(), "command is required") {
+		t.Fatalf("Validate() error = %v, want missing target command", err)
+	}
+
+	cfg.Status.Targets = []StatusTarget{
+		{Session: "work", Command: "./one"},
+		{Session: "work", Command: "./two"},
+	}
+	if err := Validate(cfg); err == nil || !strings.Contains(err.Error(), "duplicates") {
+		t.Fatalf("Validate() error = %v, want duplicate target session", err)
 	}
 }
 

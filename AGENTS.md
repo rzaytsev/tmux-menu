@@ -21,7 +21,7 @@ Work directly and keep changes small. This is a local tmux utility, not a framew
 - `projects`: lists one-level directories under `projects.roots`, creates/switches tmux sessions natively, and shows whether the configured bootstrap file exists.
 - `links`: captures origin pane scrollback, extracts URL schemes configured by `links.url_schemes` (default HTTP, HTTPS, Slack, and Telegram), copies selected targets, opens file refs through configured `links.open`, opens URLs with `open`, and supports a configured alternate opener.
 - `bookmarks`: scans inline Markdown links from `bookmarks.dirs` in configured order, default `["~/notes/projects/{project}", "~/projects/{project}"]`, skips path parts matching `bookmarks.ignore_patterns` defaulting to `.git`, `.tmp`, and `vendor`, opens HTTP(S) links with `open`, and opens local file links in a right-side editor pane.
-- `status`: runs optional project-local `status.command` from the tmux session root, or shows a task board from configured `status.status_dir` roots, default `["./todo"]`, and configured `status.statuses` subdirs, default `["new", "doing", "done"]`; rows show status, filename-derived title with `-`/`_` as spaces, and `summary: ...`, with Space toggling full preview and Enter opening the file in an editor split pane.
+- `status`: when `status.targets` is configured, concurrently runs one JSON reporter per named active tmux session and shows urgency-sorted project rows with a visible block preview; otherwise it runs optional project-local `status.command` or shows the directory task board from `status.status_dir` and `status.statuses`.
 - Picker views support Tab/Shift-Tab through configured `picker.tab_order` and `Alt-1` main, `Alt-2` agents, `Alt-3` tools, `Alt-4` projects, `Alt-5` status, `Alt-6` bookmarks through `fzf --expect`; navigation shortcuts are always shown in a persistent footer, while `picker.show_help` controls optional view-specific help.
 - Global config path: `~/.tmux-menu.conf`; local `.tmux-menu.conf` overlays in the session root and origin pane directory can add commands/quick dirs or replace scalar/list settings.
 
@@ -48,8 +48,12 @@ Work directly and keep changes small. This is a local tmux utility, not a framew
 - In popup-launched views, use `TMUX_MENU_ORIGIN_PANE` and `TMUX_MENU_ORIGIN_PATH` when inspecting the caller pane.
 - Status `status_dir` values are arrays and are resolved from `TMUX_MENU_SESSION_PATH` / `#{session_path}`, with origin path only as fallback.
 - A non-empty `status.command` replaces the directory picker and runs from the tmux session root with the `TMUX_MENU_*` runtime context.
+- Non-empty `status.targets` takes precedence over `status.command`; each target matches an exact active session name, runs one reporter from that session root, and uses the stable session ID for Enter dispatch.
+- Status reporters return a JSON object with a non-empty `blocks` array. Blocks require `title`, `status`, and `summary`, may include `details`, and use only `attention`, `warning`, `ok`, or `unknown`.
+- Radar reporters run concurrently with the positive `status.report_timeout` and a 1 MiB stdout limit; missing sessions, failures, timeouts, and invalid output remain visible as `unknown` reports rather than aborting the view.
+- Radar rows sort by `attention`, `warning`, `unknown`, then `ok`, retain configured target order within each severity, and use a visible fixed right preview with blocks in reporter order.
 - Status `statuses` controls the visible status subdirectories and display order; directories not listed, such as `old`, are hidden.
-- Status previews use `fzf --preview` hidden by default and toggled with Space; `preview_command = "glow"` appends the selected file path, while commands containing `{}` replace that placeholder with the file path.
+- Directory-board status previews use `fzf --preview` hidden by default and toggled with Space; `preview_command = "glow"` appends the selected file path, while commands containing `{}` replace that placeholder with the file path.
 - Status item preview fields must pass raw file paths to `fzf`; do not pre-shell-quote them.
 - Status labels are only `<status> | <title> | <summary>`; do not include a redundant `status` kind prefix or visible file path.
 - Status selections open the file through `editor.command` using configured `status.open`.

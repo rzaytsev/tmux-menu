@@ -136,12 +136,21 @@ pane_side = "right"
 [status]
 # Optional command replacing the directory-based status picker for this config.
 # command = 'python3 "$TMUX_MENU_SESSION_PATH/scripts/todo.py"'
+# Timeout applied independently to every cross-project reporter.
+report_timeout = "3s"
 # Relative paths resolve from the current tmux session root.
 status_dir = ["./todo"]
 # Status subdirectories shown under each status_dir, in display order.
 statuses = ["new", "doing", "done"]
 preview_command = "glow"
 ignore_patterns = [".gitkeep"]
+
+# Add one reporter per active tmux session to enable the cross-project radar.
+# The command runs from that session's root and prints the documented JSON format.
+# [[status.targets]]
+# title = "Example"
+# session = "example"
+# command = "./scripts/status-report"
 
 [status.open]
 # Opener for selected status files: popup, pane, or window.

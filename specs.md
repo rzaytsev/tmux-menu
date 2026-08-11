@@ -329,10 +329,31 @@ tmux pane split to the right of the origin pane.
 
 ## Status Mode
 
-When `status.command` is non-empty, `status` runs that shell command from the
-tmux session root with the `TMUX_MENU_*` context variables and does not open the
-directory picker. This lets project overlays supply a task workflow with a
-different storage model.
+When `status.targets` is non-empty, `status` shows one row per configured active
+tmux session. Each target defines an optional title, an exact session name, and
+one reporter command. Commands run concurrently from their target session roots
+with a per-command `status.report_timeout`, default `3s`, and receive target
+session values through `TMUX_MENU_SESSION_*` plus the caller pane/path through
+`TMUX_MENU_ORIGIN_*`.
+
+Reporter stdout is a JSON object with a non-empty `blocks` array. Each block has
+required `title`, `status`, and `summary` strings plus optional `details`.
+Supported block statuses are `attention`, `warning`, `ok`, and `unknown`.
+Unknown fields, malformed JSON, invalid blocks, process failures, and timeouts
+produce a visible `unknown` report rather than aborting the whole radar.
+Reporter stdout is limited to 1 MiB.
+
+Radar rows are ordered by aggregate severity (`attention`, `warning`, `unknown`,
+`ok`) and retain configured target order within a severity. tmux-menu derives the
+aggregate state and top two problem summaries. A fixed, visible right preview
+shows blocks in reporter order. Enter switches to an available target through
+its stable tmux session ID; missing configured sessions remain visible and are
+display-only.
+
+When no targets are configured and `status.command` is non-empty, `status` runs
+that shell command from the tmux session root with the `TMUX_MENU_*` context
+variables and does not open the directory picker. This lets project overlays
+supply a task workflow with a different storage model.
 
 Otherwise, `status` shows a lane-ordered task board from each
 `status.status_dir`. Relative
@@ -448,10 +469,16 @@ pane_side = "right"
 
 [status]
 # command = 'python3 "$TMUX_MENU_SESSION_PATH/scripts/todo.py"'
+report_timeout = "3s"
 status_dir = ["./todo"]
 statuses = ["new", "doing", "done"]
 preview_command = "glow"
 ignore_patterns = [".gitkeep"]
+
+# [[status.targets]]
+# title = "Example"
+# session = "example"
+# command = "./scripts/status-report"
 
 [status.open]
 mode = "pane"

@@ -178,10 +178,17 @@ mode = "pane"
 pane_side = "right"
 
 [status]
+report_timeout = "3s"
 status_dir = ["./todo"]
 statuses = ["new", "doing", "done"]
 preview_command = "glow"
 ignore_patterns = [".gitkeep"]
+
+# Uncomment to replace the single-project modes with a cross-project radar.
+# [[status.targets]]
+# title = "Example"
+# session = "example"
+# command = "./scripts/status-report"
 
 [status.open]
 mode = "pane"
@@ -405,7 +412,68 @@ relative to the Markdown source file and use `[bookmarks.open]`.
 
 ### `status`
 
-`status` shows task files under configured roots.
+`status` has three modes, selected in this order:
+
+1. When `[[status.targets]]` entries exist, it shows a cross-project radar.
+2. Otherwise, `command` runs a project-owned status interface.
+3. Otherwise, it shows task files under configured roots.
+
+Radar targets are active tmux sessions. Each target has:
+
+- `title`: optional display title; defaults to `session`.
+- `session`: exact tmux session name.
+- `command`: reporter command, run from that session's root.
+
+`report_timeout` is applied independently to every reporter and defaults to
+`3s`. Reporters run concurrently, so one slow project does not delay all others.
+Missing sessions, command failures, timeouts, and invalid output appear as
+`unknown` rows instead of closing the picker. Rows are sorted by `attention`,
+`warning`, `unknown`, then `ok`; Enter switches using the target's stable tmux
+session ID. The right preview is visible by default and preserves reporter block
+order.
+
+The reporter must print one JSON object:
+
+```json
+{
+  "blocks": [
+    {
+      "title": "Agents",
+      "status": "attention",
+      "summary": "Permission required",
+      "details": "Codex in pane %3 is waiting for approval"
+    },
+    {
+      "title": "Git",
+      "status": "warning",
+      "summary": "3 changed files"
+    }
+  ]
+}
+```
+
+Every block requires `title`, `status`, and `summary`; `details` is optional.
+Valid statuses are `attention`, `warning`, `ok`, and `unknown`. tmux-menu derives
+the row status and its top two problem summaries from the blocks. The command
+output is limited to 1 MiB. The reporter process receives
+`TMUX_MENU_SESSION_ID`, `TMUX_MENU_SESSION_NAME`, and
+`TMUX_MENU_SESSION_PATH` for the target plus the caller's
+`TMUX_MENU_ORIGIN_PANE` and `TMUX_MENU_ORIGIN_PATH`.
+
+A portable Git/task example is
+[`examples/status-report.sh`](../examples/status-report.sh). For a quick trial:
+
+```toml
+[status]
+report_timeout = "3s"
+
+[[status.targets]]
+title = "tmux-menu"
+session = "tmux-menu"
+command = "sh /path/to/tmux-menu/examples/status-report.sh"
+```
+
+When the radar is not configured, the directory board uses:
 
 - `command`: optional shell command that replaces the directory-based picker;
   it runs from the tmux session root with the `TMUX_MENU_*` context variables.

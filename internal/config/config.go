@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -120,12 +121,20 @@ type BookmarksConfig struct {
 }
 
 type StatusConfig struct {
-	Command        string     `json:"command" toml:"command"`
-	StatusDirs     StringList `json:"status_dir" toml:"status_dir"`
-	Statuses       StringList `json:"statuses" toml:"statuses"`
-	PreviewCommand string     `json:"preview_command" toml:"preview_command"`
-	IgnorePatterns []string   `json:"ignore_patterns" toml:"ignore_patterns"`
-	Open           OpenConfig `json:"open" toml:"open"`
+	Command        string         `json:"command" toml:"command"`
+	StatusDirs     StringList     `json:"status_dir" toml:"status_dir"`
+	Statuses       StringList     `json:"statuses" toml:"statuses"`
+	PreviewCommand string         `json:"preview_command" toml:"preview_command"`
+	IgnorePatterns []string       `json:"ignore_patterns" toml:"ignore_patterns"`
+	ReportTimeout  string         `json:"report_timeout" toml:"report_timeout"`
+	Targets        []StatusTarget `json:"targets,omitempty" toml:"targets,omitempty"`
+	Open           OpenConfig     `json:"open" toml:"open"`
+}
+
+type StatusTarget struct {
+	Title   string `json:"title,omitempty" toml:"title,omitempty"`
+	Session string `json:"session" toml:"session"`
+	Command string `json:"command" toml:"command"`
 }
 
 type StringList []string
@@ -257,6 +266,7 @@ func Default() Config {
 			Statuses:       []string{"new", "doing", "done"},
 			PreviewCommand: "glow",
 			IgnorePatterns: []string{".gitkeep"},
+			ReportTimeout:  "3s",
 			Open: OpenConfig{
 				Mode:     "pane",
 				PaneSide: "below",
@@ -518,6 +528,12 @@ func overlayDefined(dst *Config, src Config, meta toml.MetaData) {
 	if meta.IsDefined("status", "ignore_patterns") {
 		dst.Status.IgnorePatterns = src.Status.IgnorePatterns
 	}
+	if meta.IsDefined("status", "report_timeout") {
+		dst.Status.ReportTimeout = src.Status.ReportTimeout
+	}
+	if meta.IsDefined("status", "targets") {
+		dst.Status.Targets = src.Status.Targets
+	}
 	if meta.IsDefined("status", "open", "mode") {
 		dst.Status.Open.Mode = src.Status.Open.Mode
 	}
@@ -576,6 +592,16 @@ func normalizeConfig(cfg *Config) {
 	} {
 		open.Mode = strings.TrimSpace(open.Mode)
 		open.PaneSide = strings.TrimSpace(open.PaneSide)
+	}
+	cfg.Status.ReportTimeout = strings.TrimSpace(cfg.Status.ReportTimeout)
+	for i := range cfg.Status.Targets {
+		target := &cfg.Status.Targets[i]
+		target.Title = strings.TrimSpace(target.Title)
+		target.Session = strings.TrimSpace(target.Session)
+		target.Command = strings.TrimSpace(target.Command)
+		if target.Title == "" {
+			target.Title = target.Session
+		}
 	}
 }
 
@@ -689,6 +715,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if len(cfg.Status.IgnorePatterns) == 0 {
 		cfg.Status.IgnorePatterns = append([]string(nil), def.Status.IgnorePatterns...)
+	}
+	if cfg.Status.ReportTimeout == "" {
+		cfg.Status.ReportTimeout = def.Status.ReportTimeout
 	}
 	if cfg.Status.Open.Mode == "" {
 		cfg.Status.Open.Mode = def.Status.Open.Mode
@@ -824,6 +853,22 @@ func Validate(cfg Config) error {
 		if strings.TrimSpace(status) == "" {
 			return fmt.Errorf("status.statuses[%d] is required", i)
 		}
+	}
+	if timeout, err := time.ParseDuration(cfg.Status.ReportTimeout); err != nil || timeout <= 0 {
+		return fmt.Errorf("status.report_timeout must be a positive duration")
+	}
+	seenStatusSessions := make(map[string]bool)
+	for i, target := range cfg.Status.Targets {
+		if target.Session == "" {
+			return fmt.Errorf("status.targets[%d].session is required", i)
+		}
+		if target.Command == "" {
+			return fmt.Errorf("status.targets[%d].command is required", i)
+		}
+		if seenStatusSessions[target.Session] {
+			return fmt.Errorf("status.targets[%d].session duplicates %q", i, target.Session)
+		}
+		seenStatusSessions[target.Session] = true
 	}
 	return nil
 }
@@ -1066,12 +1111,20 @@ pane_side = "right"
 [status]
 # Optional command replacing the directory-based status picker for this config.
 # command = 'python3 "$TMUX_MENU_SESSION_PATH/scripts/todo.py"'
+# Reporter timeout for each configured cross-project radar target.
+report_timeout = "3s"
 # Relative paths resolve from the current tmux session root.
 status_dir = ["./todo"]
 # Status subdirectories shown under each status_dir, in display order.
 statuses = ["new", "doing", "done"]
 preview_command = "glow"
 ignore_patterns = [".gitkeep"]
+
+# Add one reporter per active tmux session to enable the radar view:
+# [[status.targets]]
+# title = "Example"
+# session = "example"
+# command = "./scripts/status-report"
 
 [status.open]
 # Opener for selected status files: popup, pane, or window.
