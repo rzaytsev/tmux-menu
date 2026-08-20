@@ -40,13 +40,14 @@ type span struct {
 }
 
 type style struct {
-	bold       bool
-	dim        bool
-	italic     bool
-	underline  bool
-	reverse    bool
-	foreground int
-	background int
+	bold          bool
+	dim           bool
+	italic        bool
+	underline     bool
+	reverse       bool
+	foreground    int
+	foreground256 int
+	background    int
 }
 
 func SanitizeText(raw string, width int) Text {
@@ -322,6 +323,7 @@ func applySGR(current style, params []int) style {
 			current.foreground = param
 		case param == 39:
 			current.foreground = 0
+			current.foreground256 = 0
 		case param >= 40 && param <= 47, param >= 100 && param <= 107:
 			current.background = param
 		case param == 49:
@@ -350,6 +352,9 @@ func (s style) ansi() string {
 	}
 	if s.foreground != 0 {
 		codes = append(codes, strconv.Itoa(s.foreground))
+	}
+	if s.foreground256 != 0 {
+		codes = append(codes, "38", "5", strconv.Itoa(s.foreground256))
 	}
 	if s.background != 0 {
 		codes = append(codes, strconv.Itoa(s.background))
