@@ -473,6 +473,26 @@ func TestValidateRejectsBadAgentPresentation(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsActiveOrAmbiguousAgentIcons(t *testing.T) {
+	values := map[string]string{
+		"escape":       "!\x1b[31m",
+		"c0":           "!\a",
+		"c1":           "!\u009b",
+		"bidi":         "!\u202e",
+		"isolate":      "!\u2066",
+		"invalid utf8": string([]byte{'!', 0xff}),
+	}
+	for name, value := range values {
+		t.Run(name, func(t *testing.T) {
+			cfg := Default()
+			cfg.Agents.Icons.Other = value
+			if err := Validate(cfg); err == nil || !strings.Contains(err.Error(), "agents.icons.other") {
+				t.Fatalf("icon %q validation error = %v", value, err)
+			}
+		})
+	}
+}
+
 func TestValidateAcceptsAllAgentColors(t *testing.T) {
 	for _, color := range strings.Split(AgentColorOptions, ", ") {
 		cfg := Default()

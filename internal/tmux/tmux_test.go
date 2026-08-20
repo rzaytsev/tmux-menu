@@ -1,11 +1,14 @@
 package tmux
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParsePanes(t *testing.T) {
@@ -113,6 +116,60 @@ func TestCapturePaneBuildsExpectedTmuxArgs(t *testing.T) {
 	want := "capture-pane -p -S -25 -t %7"
 	if got != want {
 		t.Fatalf("capture args = %q, want %q", got, want)
+	}
+}
+
+func TestRunCommandBoundedFailsAtCapPlusOne(t *testing.T) {
+	budget := NewOutputBudget(4096)
+	_, err := RunCommandBounded(t.Context(), budget, 64, "sh", "-c", "head -c 65 /dev/zero")
+	if !errors.Is(err, ErrOutputLimit) {
+		t.Fatalf("cap-plus-one error = %v", err)
+	}
+	if budget.Used() > 64 {
+		t.Fatalf("budget retained %d bytes, want at most 64", budget.Used())
+	}
+}
+
+func TestRunCommandBoundedCancelsBlockedCommand(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, err := RunCommandBounded(ctx, NewOutputBudget(1024), 1024, "sh", "-c", "while :; do :; done")
+	if !errors.Is(err, context.DeadlineExceeded) || time.Since(started) > 500*time.Millisecond {
+		t.Fatalf("blocked command returned err=%v after %s", err, time.Since(started))
+	}
+}
+
+func TestListPanesBoundedRejectsRowFieldAndOutputOverflow(t *testing.T) {
+	valid := framePaneFields("work", "$1", "api", "@2", "1", "0", "%3", "server", "codex", "/tmp/project", "1", "1", "1234", "0", "/tmp/session")
+	if _, err := parsePanesBounded(valid+"\n"+valid+"\n", PaneListLimits{MaxRows: 1, MaxFieldBytes: 128}); err == nil {
+		t.Fatal("expected pane row overflow")
+	}
+	oversizedField := framePaneFields("workspace", "$1", "api", "@2", "1", "0", "%3", "server", "codex", "/tmp/project", "1", "1", "1234", "0", "/tmp/session")
+	if _, err := parsePanesBounded(oversizedField, PaneListLimits{MaxRows: 2, MaxFieldBytes: 8}); err == nil {
+		t.Fatal("expected pane field overflow")
+	}
+
+	writeFakeTmux(t, "head -c 129 /dev/zero\n")
+	limits := PaneListLimits{MaxOutputBytes: 128, MaxRows: 2, MaxFieldBytes: 128}
+	if _, err := ListPanesBounded(t.Context(), NewOutputBudget(256), limits); !errors.Is(err, ErrOutputLimit) {
+		t.Fatalf("output overflow error = %v", err)
+	}
+}
+
+func TestCapturePaneBoundedUsesStableTargetStyledOutputAndSharedBudget(t *testing.T) {
+	writeFakeTmux(t, "printf '%s\\n' \"$*\"\n")
+	budget := NewOutputBudget(256)
+	got, err := CapturePaneBounded(t.Context(), budget, "%7", 25, 128)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "capture-pane -e -p -S -25 -t %7"
+	if got != want {
+		t.Fatalf("capture args = %q, want %q", got, want)
+	}
+	if _, err := CapturePaneBounded(t.Context(), budget, "work:1.2", 25, 128); err == nil {
+		t.Fatal("non-canonical pane target was accepted")
 	}
 }
 

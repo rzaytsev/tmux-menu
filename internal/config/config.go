@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/BurntSushi/toml"
 )
@@ -808,8 +809,16 @@ func validateAgentIcon(name string, value string, allowEmpty bool) error {
 		}
 		return fmt.Errorf("%s is required", name)
 	}
-	if strings.ContainsAny(value, "\t\r\n") {
-		return fmt.Errorf("%s cannot contain tabs or newlines", name)
+	if !utf8.ValidString(value) {
+		return fmt.Errorf("%s must be valid UTF-8", name)
+	}
+	for _, char := range value {
+		if char < 0x20 || (char >= 0x7f && char <= 0x9f) ||
+			char == 0x061c || char == 0x200e || char == 0x200f ||
+			(char >= 0x202a && char <= 0x202e) ||
+			(char >= 0x2066 && char <= 0x2069) {
+			return fmt.Errorf("%s cannot contain terminal or bidi controls", name)
+		}
 	}
 	return nil
 }

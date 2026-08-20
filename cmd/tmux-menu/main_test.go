@@ -34,6 +34,30 @@ func TestCleanPaneTitleDropsLocalUserHostPrefix(t *testing.T) {
 	}
 }
 
+func TestAgentProcessSnapshotBoundedFailsClosedAtSharedOutputCap(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ps")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nhead -c 65 /dev/zero\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	snapshot := agentProcessSnapshotBounded(t.Context(), tmux.NewOutputBudget(64), 64)
+	if snapshot.available || len(snapshot.roots) != 0 {
+		t.Fatalf("overflowing process inventory must fail closed: %#v", snapshot)
+	}
+}
+
+func TestParseProcessListBoundedRejectsRowAndFieldOverflow(t *testing.T) {
+	valid := "100 1 S codex"
+	if _, ok := parseProcessListBounded(valid+"\n"+valid+"\n", 1, 64); ok {
+		t.Fatal("process row overflow was accepted")
+	}
+	if _, ok := parseProcessListBounded("100 1 S "+strings.Repeat("x", 65), 4, 64); ok {
+		t.Fatal("process field overflow was accepted")
+	}
+}
+
 func TestCleanPaneTitleDropsShortLocalHostPrefix(t *testing.T) {
 	t.Setenv("USER", "alice")
 	got := cleanPaneTitle("alice@workstation:~/projects/tmux-menu")

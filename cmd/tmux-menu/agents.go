@@ -20,13 +20,17 @@ import (
 type agentStatus = agentstatus.State
 
 const (
-	agentStatusAttention     = agentstatus.StateAttention
-	agentStatusWaiting       = agentstatus.StateWaiting
-	agentStatusWorking       = agentstatus.StateWorking
-	agentStatusCompleted     = agentstatus.StateCompleted
-	agentStatusUnknown       = agentstatus.StateUnknown
-	agentVisibleResultRows   = 12
-	agentPickerNonResultRows = 4
+	agentStatusAttention            = agentstatus.StateAttention
+	agentStatusWaiting              = agentstatus.StateWaiting
+	agentStatusWorking              = agentstatus.StateWorking
+	agentStatusCompleted            = agentstatus.StateCompleted
+	agentStatusUnknown              = agentstatus.StateUnknown
+	agentVisibleResultRows          = 12
+	agentPickerNonResultRows        = 4
+	agentInventoryOutputBytes int64 = 8 << 20
+	agentProcessOutputBytes   int64 = 4 << 20
+	agentProcessRows                = 32768
+	agentProcessFieldBytes          = 16 << 10
 )
 
 type agentRow struct {
@@ -82,16 +86,24 @@ func selectAgentsAt(ctx context.Context, initialPaneID string) (picker.Result[me
 }
 
 func loadAgentInventory(ctx context.Context, fallbackSessionColor string, now time.Time) (agentInventory, error) {
-	panes, err := tmux.ListPanes(ctx)
+	return loadAgentInventoryBounded(ctx, fallbackSessionColor, now, tmux.NewOutputBudget(agentInventoryOutputBytes))
+}
+
+func loadAgentInventoryBounded(ctx context.Context, fallbackSessionColor string, now time.Time, budget *tmux.OutputBudget) (agentInventory, error) {
+	panes, err := tmux.ListPanesBounded(ctx, budget, tmux.DefaultPaneListLimits())
 	if err != nil {
 		return agentInventory{}, err
 	}
-	return agentInventoryForPanes(ctx, panes, fallbackSessionColor, now)
+	return agentInventoryForPanesBounded(ctx, panes, fallbackSessionColor, now, budget)
 }
 
 func agentInventoryForPanes(ctx context.Context, panes []tmux.Pane, fallbackSessionColor string, now time.Time) (agentInventory, error) {
+	return agentInventoryForPanesBounded(ctx, panes, fallbackSessionColor, now, tmux.NewOutputBudget(agentProcessOutputBytes))
+}
+
+func agentInventoryForPanesBounded(ctx context.Context, panes []tmux.Pane, fallbackSessionColor string, now time.Time, budget *tmux.OutputBudget) (agentInventory, error) {
 	panes = validLiveAgentPanes(panes)
-	snapshot := loadAgentProcessSnapshot(panes)
+	snapshot := loadAgentProcessSnapshotBounded(ctx, panes, budget)
 	annotations := loadAgentHookAnnotations(ctx, panes, snapshot, now)
 	rows := agentRowsForPanes(panes, snapshot, annotations)
 	sessionColors, err := loadAgentSessionColors(agentPanesFromRows(rows), fallbackSessionColor)
@@ -566,9 +578,13 @@ func isProcessTreeAgentPane(p tmux.Pane, snapshot processSnapshot) bool {
 }
 
 func loadAgentProcessSnapshot(panes []tmux.Pane) processSnapshot {
+	return loadAgentProcessSnapshotBounded(context.Background(), panes, tmux.NewOutputBudget(agentProcessOutputBytes))
+}
+
+func loadAgentProcessSnapshotBounded(ctx context.Context, panes []tmux.Pane, budget *tmux.OutputBudget) processSnapshot {
 	for _, p := range panes {
 		if p.PanePID != "" {
-			return agentProcessSnapshot()
+			return agentProcessSnapshotBounded(ctx, budget, agentProcessOutputBytes)
 		}
 	}
 	return processSnapshot{}
@@ -847,12 +863,16 @@ type processSnapshot struct {
 	available    bool
 }
 
-func agentProcessSnapshot() processSnapshot {
-	out, err := exec.Command("ps", "-axo", "pid=,ppid=,state=,command=").Output()
+func agentProcessSnapshotBounded(ctx context.Context, budget *tmux.OutputBudget, maxBytes int64) processSnapshot {
+	out, err := tmux.RunCommandBounded(ctx, budget, maxBytes, "ps", "-axo", "pid=,ppid=,state=,command=")
 	if err != nil {
 		return processSnapshot{}
 	}
-	snapshot := buildProcessSnapshot(parseProcessList(string(out)))
+	processes, ok := parseProcessListBounded(out, agentProcessRows, agentProcessFieldBytes)
+	if !ok {
+		return processSnapshot{}
+	}
+	snapshot := buildProcessSnapshot(processes)
 	snapshot.available = true
 	return snapshot
 }
@@ -941,18 +961,41 @@ func processLooksRunning(p processInfo) bool {
 }
 
 func parseProcessList(out string) []processInfo {
+	processes, _ := parseProcessListBounded(out, agentProcessRows, agentProcessFieldBytes)
+	return processes
+}
+
+func parseProcessListBounded(out string, maxRows, maxFieldBytes int) ([]processInfo, bool) {
+	if maxRows <= 0 || maxFieldBytes <= 0 {
+		return nil, false
+	}
 	processes := make([]processInfo, 0)
-	for _, line := range strings.Split(out, "\n") {
+	rows := 0
+	for offset := 0; offset < len(out); {
+		end := strings.IndexByte(out[offset:], '\n')
+		if end < 0 {
+			end = len(out)
+		} else {
+			end += offset
+		}
+		line := out[offset:end]
+		rows++
+		if rows > maxRows || len(line) > maxFieldBytes {
+			return nil, false
+		}
 		fields := strings.Fields(line)
 		if len(fields) < 4 {
+			offset = nextProcessLineOffset(end, len(out))
 			continue
 		}
 		pid, err := strconv.Atoi(fields[0])
 		if err != nil {
+			offset = nextProcessLineOffset(end, len(out))
 			continue
 		}
 		ppid, err := strconv.Atoi(fields[1])
 		if err != nil {
+			offset = nextProcessLineOffset(end, len(out))
 			continue
 		}
 		processes = append(processes, processInfo{
@@ -961,6 +1004,14 @@ func parseProcessList(out string) []processInfo {
 			state:   fields[2],
 			command: strings.Join(fields[3:], " "),
 		})
+		offset = nextProcessLineOffset(end, len(out))
 	}
-	return processes
+	return processes, true
+}
+
+func nextProcessLineOffset(end, length int) int {
+	if end < length {
+		return end + 1
+	}
+	return end
 }
