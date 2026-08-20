@@ -26,6 +26,7 @@ type Result[T any] struct {
 type Options struct {
 	PreviewWindow string
 	Bindings      []string
+	InitialIndex  int
 }
 
 var ErrCanceled = errors.New("selection canceled")
@@ -126,6 +127,9 @@ func buildFZFArgs(prompt string, expectKeys []string, footer string, previewComm
 	}
 	if options.PreviewWindow != "" {
 		args = append(args, "--preview-window", options.PreviewWindow)
+	}
+	if options.InitialIndex > 0 {
+		args = append(args, "--bind", fmt.Sprintf("load:pos(%d)", options.InitialIndex+1))
 	}
 	for _, binding := range options.Bindings {
 		if strings.TrimSpace(binding) == "" {

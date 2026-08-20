@@ -51,41 +51,32 @@ func agentPaneLabel(p tmux.Pane, currentPaneID string, status agentStatus, name 
 }
 
 func agentPaneLabelWithConfig(p tmux.Pane, currentPaneID string, status agentStatus, name string, sessionColor string, agentsConfig config.AgentsConfig) string {
-	title := agentPaneTitle(p)
-	label := name
-	if p.PaneID == currentPaneID {
-		label += agentsConfig.Icons.Current
-	}
-	return fmt.Sprintf("%s %s %s  %s  %s",
-		colorAgentStatusWithConfig(status, agentsConfig), colorAgentNameWithConfig(label, name, agentsConfig), colorSessionWithColor(shortUUID(p.SessionName), sessionColor), colorAgentThread(title, agentsConfig), colorAgentText(shortenHome(p.CurrentPath), agentsConfig.Colors.Workdir, false))
-}
-
-func agentSessionLabel(p tmux.Pane, sessionColor string) string {
-	return colorSessionWithColor(shortUUID(p.SessionName), sessionColor)
-}
-
-func agentTreePaneLabel(p tmux.Pane, currentPaneID string, status agentStatus, name string, last bool) string {
-	return agentTreePaneLabelWithConfig(p, currentPaneID, status, name, last, config.Default().Agents)
-}
-
-func agentTreePaneLabelWithConfig(p tmux.Pane, currentPaneID string, status agentStatus, name string, last bool, agentsConfig config.AgentsConfig) string {
-	branch := agentsConfig.Icons.Branch
-	if last {
-		branch = agentsConfig.Icons.LastBranch
-	}
-	title := agentTreePaneTitle(p, name)
+	title := agentListPaneTitle(p, name)
 	if p.PaneID != "" && p.PaneID == currentPaneID {
 		title = agentsConfig.Icons.Current + title
 	}
-	return fmt.Sprintf("  %s %s %s %s  %s",
-		colorAgentText(branch, agentsConfig.Colors.Branch, false), colorAgentStatusWithConfig(status, agentsConfig), colorAgentIcon(name, agentsConfig), colorAgentThread(title, agentsConfig), colorAgentText(agentTreeWorkdir(p.CurrentPath), agentsConfig.Colors.Workdir, false))
+	return fmt.Sprintf("%s %s %s  %s  %s",
+		colorAgentStatusWithConfig(status, agentsConfig), colorAgentIcon(name, agentsConfig), colorSessionWithColor(shortUUID(p.SessionName), sessionColor), colorAgentThread(title, agentsConfig), colorAgentText(shortenHome(p.CurrentPath), agentsConfig.Colors.Workdir, false))
 }
 
-func agentTreeWorkdir(path string) string {
+func agentListPaneLabel(p tmux.Pane, currentPaneID string, status agentStatus, name string, sessionColor string) string {
+	return agentListPaneLabelWithConfig(p, currentPaneID, status, name, sessionColor, config.Default().Agents)
+}
+
+func agentListPaneLabelWithConfig(p tmux.Pane, currentPaneID string, status agentStatus, name string, sessionColor string, agentsConfig config.AgentsConfig) string {
+	title := agentListPaneTitle(p, name)
+	if p.PaneID != "" && p.PaneID == currentPaneID {
+		title = agentsConfig.Icons.Current + title
+	}
+	return fmt.Sprintf("%s %s %s %s  %s",
+		colorSessionWithColor(shortUUID(p.SessionName), sessionColor), colorAgentStatusWithConfig(status, agentsConfig), colorAgentIcon(name, agentsConfig), colorAgentThread(title, agentsConfig), colorAgentText(agentListWorkdir(p.CurrentPath), agentsConfig.Colors.Workdir, false))
+}
+
+func agentListWorkdir(path string) string {
 	return strings.TrimPrefix(shortenHome(path), "~/projects/")
 }
 
-func agentTreePaneTitle(p tmux.Pane, name string) string {
+func agentListPaneTitle(p tmux.Pane, name string) string {
 	title := agentPaneTitle(p)
 	if name != "claude" {
 		return title
@@ -297,21 +288,12 @@ func colorAgentStatusWithConfig(status agentStatus, agentsConfig config.AgentsCo
 		return colorAgentText(agentsConfig.Icons.Attention, agentsConfig.Colors.Attention, true)
 	case agentStatusWorking:
 		return colorAgentText(agentsConfig.Icons.Working, agentsConfig.Colors.Working, false)
+	case agentStatusCompleted:
+		return colorAgentText(agentsConfig.Icons.Completed, agentsConfig.Colors.Completed, false)
 	case agentStatusWaiting:
 		return colorAgentText(agentsConfig.Icons.Waiting, agentsConfig.Colors.Waiting, false)
 	default:
 		return colorAgentText(agentsConfig.Icons.Unknown, agentsConfig.Colors.Unknown, false)
-	}
-}
-
-func colorAgentNameWithConfig(label string, name string, agentsConfig config.AgentsConfig) string {
-	switch name {
-	case "codex":
-		return colorAgentText(label, agentsConfig.Colors.Codex, false)
-	case "claude":
-		return colorAgentText(label, agentsConfig.Colors.Claude, false)
-	default:
-		return colorAgentText(label, agentsConfig.Colors.Other, false)
 	}
 }
 
@@ -383,6 +365,9 @@ func processCommandClass(command string) string {
 }
 
 func processAgentName(command string) string {
+	if isAgentHookCommand(command) {
+		return ""
+	}
 	for _, field := range strings.Fields(command) {
 		name := strings.Trim(field, `"'`)
 		if name == "" {
@@ -393,6 +378,20 @@ func processAgentName(command string) string {
 		}
 	}
 	return ""
+}
+
+func isAgentHookCommand(command string) bool {
+	fields := strings.Fields(command)
+	for i := 0; i+2 < len(fields); i++ {
+		first := strings.Trim(fields[i], `"'`)
+		second := strings.Trim(fields[i+1], `"'`)
+		third := strings.Trim(fields[i+2], `"'`)
+		if first == "agent-hook" && (second == "ingest" || second == "trace") &&
+			(third == "codex" || third == "claude") {
+			return true
+		}
+	}
+	return false
 }
 func dim(s string) string {
 	if s == "" {

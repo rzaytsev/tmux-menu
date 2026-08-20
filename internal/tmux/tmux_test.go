@@ -3,12 +3,13 @@ package tmux
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
 
 func TestParsePanes(t *testing.T) {
-	line := "work" + sep + "$1" + sep + "api" + sep + "@2" + sep + "1" + sep + "0" + sep + "%3" + sep + "server" + sep + "codex" + sep + "/tmp/project" + sep + "1" + sep + "1" + sep + "1234" + sep + "0" + sep + "/tmp/session"
+	line := framePaneFields("work", "$1", "api", "@2", "1", "0", "%3", "server", "codex", "/tmp/project", "1", "1", "1234", "0", "/tmp/session")
 	panes := ParsePanes(line)
 	if len(panes) != 1 {
 		t.Fatalf("got %d panes", len(panes))
@@ -31,6 +32,42 @@ func TestParsePanes(t *testing.T) {
 	}
 }
 
+func TestParsePanesLengthFramingPreservesSeparatorsNewlinesAndUTF8(t *testing.T) {
+	first := framePaneFields("wörk"+sep+"team", "$1", "api\nwindow", "@2", "1", "0", "%3", "server\nready", "codex", "/tmp/with"+sep+"separator", "1", "1", "1234", "0", "/tmp/session")
+	second := framePaneFields("docs", "$2", "notes", "@3", "2", "1", "%4", "ready", "claude", "/tmp/docs", "0", "0", "5678", "1", "/tmp/docs")
+	panes := ParsePanes(first + "\n" + second + "\n")
+	if len(panes) != 2 {
+		t.Fatalf("got %d panes: %#v", len(panes), panes)
+	}
+	if panes[0].SessionName != "wörk"+sep+"team" || panes[0].WindowName != "api\nwindow" || panes[0].PaneTitle != "server\nready" || panes[0].CurrentPath != "/tmp/with"+sep+"separator" {
+		t.Fatalf("framed metadata shifted or changed fields: %#v", panes[0])
+	}
+	if panes[1].SessionID != "$2" || panes[1].WindowID != "@3" || panes[1].PaneID != "%4" || panes[1].PanePID != "5678" {
+		t.Fatalf("second framed identity shifted: %#v", panes[1])
+	}
+}
+
+func TestParsePanesRejectsMalformedFramingWithoutResynchronizing(t *testing.T) {
+	valid := framePaneFields("work", "$1", "api", "@2", "1", "0", "%3", "server", "codex", "/tmp/project", "1", "1", "1234", "0", "/tmp/session")
+	malformed := "4" + sep + "work" + "2" + sep + "$1"
+	for name, input := range map[string]string{
+		"legacy separator record": strings.Join([]string{"work", "$1", "api", "@2", "1", "0", "%3", "server", "codex", "/tmp/project", "1", "1", "1234", "0", "/tmp/session"}, sep),
+		"extra field":             valid + "1" + sep + "x",
+		"truncated field":         valid + "\n" + malformed,
+	} {
+		t.Run(name, func(t *testing.T) {
+			panes := ParsePanes(input)
+			want := 0
+			if name == "truncated field" {
+				want = 1
+			}
+			if len(panes) != want {
+				t.Fatalf("ParsePanes() returned %d rows, want %d: %#v", len(panes), want, panes)
+			}
+		})
+	}
+}
+
 func TestRunIncludesTmuxStderrOnFailure(t *testing.T) {
 	writeFakeTmux(t, "printf 'tmux failed\\n' >&2\nexit 2\n")
 
@@ -44,8 +81,8 @@ func TestRunIncludesTmuxStderrOnFailure(t *testing.T) {
 }
 
 func TestListPanesUsesTmuxCommandPath(t *testing.T) {
-	line := "work" + sep + "$1" + sep + "api" + sep + "@2" + sep + "1" + sep + "0" + sep + "%3" + sep + "server" + sep + "codex" + sep + "/tmp/project" + sep + "1" + sep + "1" + sep + "1234" + sep + "1" + sep + "/tmp/session"
-	writeFakeTmux(t, "printf '%s\\n' '"+line+"'\n")
+	line := framePaneFields("work", "$1", "api", "@2", "1", "0", "%3", "server", "codex", "/tmp/project", "1", "1", "1234", "1", "/tmp/session")
+	writeFakeTmux(t, "case \"$*\" in\n*'#{n:session_name}'*'#{n:pane_id}'*) printf '%s\\n' '"+line+"' ;;\n*) printf 'missing length framing: %s\\n' \"$*\" >&2; exit 2 ;;\nesac\n")
 
 	panes, err := ListPanes(t.Context())
 	if err != nil {
@@ -54,6 +91,16 @@ func TestListPanesUsesTmuxCommandPath(t *testing.T) {
 	if len(panes) != 1 || panes[0].PaneID != "%3" || panes[0].PanePID != "1234" || panes[0].SessionPath != "/tmp/session" || !panes[0].AutomaticRename {
 		t.Fatalf("panes = %#v", panes)
 	}
+}
+
+func framePaneFields(fields ...string) string {
+	var framed strings.Builder
+	for _, field := range fields {
+		framed.WriteString(strconv.Itoa(len(field)))
+		framed.WriteString(sep)
+		framed.WriteString(field)
+	}
+	return framed.String()
 }
 
 func TestCapturePaneBuildsExpectedTmuxArgs(t *testing.T) {

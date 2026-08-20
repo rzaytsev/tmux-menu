@@ -111,6 +111,14 @@ func TestBuildFZFArgsCanHidePreviewBehindSpace(t *testing.T) {
 	}
 }
 
+func TestBuildFZFArgsPositionsInitialSelection(t *testing.T) {
+	args := buildFZFArgs("agents> ", []string{"ctrl-r"}, "", "preview", Options{InitialIndex: 2})
+	got := strings.Join(args, "\n")
+	if !strings.Contains(got, "--bind\nload:pos(3)") {
+		t.Fatalf("initial picker position missing from args:\n%s", got)
+	}
+}
+
 func TestSelectWithExpectReturnsMissingFZFError(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 

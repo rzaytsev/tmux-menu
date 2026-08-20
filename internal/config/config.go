@@ -47,8 +47,9 @@ type SessionConfig struct {
 }
 
 type AgentsConfig struct {
-	Icons  AgentIconsConfig  `json:"icons" toml:"icons"`
-	Colors AgentColorsConfig `json:"colors" toml:"colors"`
+	PopupWidth string            `json:"popup_width" toml:"popup_width"`
+	Icons      AgentIconsConfig  `json:"icons" toml:"icons"`
+	Colors     AgentColorsConfig `json:"colors" toml:"colors"`
 }
 
 type AgentIconsConfig struct {
@@ -60,6 +61,7 @@ type AgentIconsConfig struct {
 	LastBranch string `json:"last_branch" toml:"last_branch"`
 	Attention  string `json:"attention" toml:"attention"`
 	Working    string `json:"working" toml:"working"`
+	Completed  string `json:"completed" toml:"completed"`
 	Waiting    string `json:"waiting" toml:"waiting"`
 	Unknown    string `json:"unknown" toml:"unknown"`
 }
@@ -73,6 +75,7 @@ type AgentColorsConfig struct {
 	Workdir   string `json:"workdir" toml:"workdir"`
 	Attention string `json:"attention" toml:"attention"`
 	Working   string `json:"working" toml:"working"`
+	Completed string `json:"completed" toml:"completed"`
 	Waiting   string `json:"waiting" toml:"waiting"`
 	Unknown   string `json:"unknown" toml:"unknown"`
 }
@@ -187,6 +190,7 @@ func Default() Config {
 			Color: DefaultSessionColor,
 		},
 		Agents: AgentsConfig{
+			PopupWidth: "100%",
 			Icons: AgentIconsConfig{
 				Codex:      ">",
 				Claude:     "✳",
@@ -195,6 +199,7 @@ func Default() Config {
 				LastBranch: "└─",
 				Attention:  "!",
 				Working:    "●",
+				Completed:  "✓",
 				Waiting:    "○",
 				Unknown:    "?",
 			},
@@ -207,6 +212,7 @@ func Default() Config {
 				Workdir:   "dim",
 				Attention: "red",
 				Working:   "green",
+				Completed: "bright_cyan",
 				Waiting:   "yellow",
 				Unknown:   "dim",
 			},
@@ -361,6 +367,9 @@ func overlayDefined(dst *Config, src Config, meta toml.MetaData) {
 	if meta.IsDefined("session", "color") {
 		dst.Session.Color = src.Session.Color
 	}
+	if meta.IsDefined("agents", "popup_width") {
+		dst.Agents.PopupWidth = src.Agents.PopupWidth
+	}
 	for _, field := range []struct {
 		path  string
 		value *string
@@ -374,6 +383,7 @@ func overlayDefined(dst *Config, src Config, meta toml.MetaData) {
 		{path: "last_branch", value: &dst.Agents.Icons.LastBranch, src: src.Agents.Icons.LastBranch},
 		{path: "attention", value: &dst.Agents.Icons.Attention, src: src.Agents.Icons.Attention},
 		{path: "working", value: &dst.Agents.Icons.Working, src: src.Agents.Icons.Working},
+		{path: "completed", value: &dst.Agents.Icons.Completed, src: src.Agents.Icons.Completed},
 		{path: "waiting", value: &dst.Agents.Icons.Waiting, src: src.Agents.Icons.Waiting},
 		{path: "unknown", value: &dst.Agents.Icons.Unknown, src: src.Agents.Icons.Unknown},
 	} {
@@ -394,6 +404,7 @@ func overlayDefined(dst *Config, src Config, meta toml.MetaData) {
 		{path: "workdir", value: &dst.Agents.Colors.Workdir, src: src.Agents.Colors.Workdir},
 		{path: "attention", value: &dst.Agents.Colors.Attention, src: src.Agents.Colors.Attention},
 		{path: "working", value: &dst.Agents.Colors.Working, src: src.Agents.Colors.Working},
+		{path: "completed", value: &dst.Agents.Colors.Completed, src: src.Agents.Colors.Completed},
 		{path: "waiting", value: &dst.Agents.Colors.Waiting, src: src.Agents.Colors.Waiting},
 		{path: "unknown", value: &dst.Agents.Colors.Unknown, src: src.Agents.Colors.Unknown},
 	} {
@@ -485,6 +496,7 @@ func overlayDefined(dst *Config, src Config, meta toml.MetaData) {
 }
 
 func normalizeConfig(cfg *Config) {
+	cfg.Agents.PopupWidth = strings.TrimSpace(cfg.Agents.PopupWidth)
 	cfg.Links.Alternate.Key = strings.TrimSpace(cfg.Links.Alternate.Key)
 	for i, scheme := range cfg.Links.URLSchemes {
 		cfg.Links.URLSchemes[i] = strings.ToLower(strings.TrimSpace(scheme))
@@ -499,6 +511,7 @@ func normalizeConfig(cfg *Config) {
 		&cfg.Agents.Icons.LastBranch,
 		&cfg.Agents.Icons.Attention,
 		&cfg.Agents.Icons.Working,
+		&cfg.Agents.Icons.Completed,
 		&cfg.Agents.Icons.Waiting,
 		&cfg.Agents.Icons.Unknown,
 	} {
@@ -513,6 +526,7 @@ func normalizeConfig(cfg *Config) {
 		&cfg.Agents.Colors.Workdir,
 		&cfg.Agents.Colors.Attention,
 		&cfg.Agents.Colors.Working,
+		&cfg.Agents.Colors.Completed,
 		&cfg.Agents.Colors.Waiting,
 		&cfg.Agents.Colors.Unknown,
 	} {
@@ -545,6 +559,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.Session.Color == "" {
 		cfg.Session.Color = def.Session.Color
 	}
+	if cfg.Agents.PopupWidth == "" {
+		cfg.Agents.PopupWidth = def.Agents.PopupWidth
+	}
 	for _, field := range []struct {
 		value    *string
 		fallback string
@@ -556,6 +573,7 @@ func applyDefaults(cfg *Config) {
 		{value: &cfg.Agents.Icons.LastBranch, fallback: def.Agents.Icons.LastBranch},
 		{value: &cfg.Agents.Icons.Attention, fallback: def.Agents.Icons.Attention},
 		{value: &cfg.Agents.Icons.Working, fallback: def.Agents.Icons.Working},
+		{value: &cfg.Agents.Icons.Completed, fallback: def.Agents.Icons.Completed},
 		{value: &cfg.Agents.Icons.Waiting, fallback: def.Agents.Icons.Waiting},
 		{value: &cfg.Agents.Icons.Unknown, fallback: def.Agents.Icons.Unknown},
 		{value: &cfg.Agents.Colors.Codex, fallback: def.Agents.Colors.Codex},
@@ -566,6 +584,7 @@ func applyDefaults(cfg *Config) {
 		{value: &cfg.Agents.Colors.Workdir, fallback: def.Agents.Colors.Workdir},
 		{value: &cfg.Agents.Colors.Attention, fallback: def.Agents.Colors.Attention},
 		{value: &cfg.Agents.Colors.Working, fallback: def.Agents.Colors.Working},
+		{value: &cfg.Agents.Colors.Completed, fallback: def.Agents.Colors.Completed},
 		{value: &cfg.Agents.Colors.Waiting, fallback: def.Agents.Colors.Waiting},
 		{value: &cfg.Agents.Colors.Unknown, fallback: def.Agents.Colors.Unknown},
 	} {
@@ -689,6 +708,7 @@ func Validate(cfg Config) error {
 		{name: "last_branch", value: cfg.Agents.Icons.LastBranch},
 		{name: "attention", value: cfg.Agents.Icons.Attention},
 		{name: "working", value: cfg.Agents.Icons.Working},
+		{name: "completed", value: cfg.Agents.Icons.Completed},
 		{name: "waiting", value: cfg.Agents.Icons.Waiting},
 		{name: "unknown", value: cfg.Agents.Icons.Unknown},
 	} {
@@ -711,6 +731,7 @@ func Validate(cfg Config) error {
 		{name: "workdir", value: cfg.Agents.Colors.Workdir},
 		{name: "attention", value: cfg.Agents.Colors.Attention},
 		{name: "working", value: cfg.Agents.Colors.Working},
+		{name: "completed", value: cfg.Agents.Colors.Completed},
 		{name: "waiting", value: cfg.Agents.Colors.Waiting},
 		{name: "unknown", value: cfg.Agents.Colors.Unknown},
 	} {
@@ -899,6 +920,10 @@ tab_order = ["palette", "agents", "tools", "projects", "status", "bookmarks"]
 # bright_magenta, bright_cyan, bright_white.
 color = "cyan"
 
+[agents]
+# Dedicated agents popup width; other views use popup.width.
+popup_width = "100%%"
+
 [agents.icons]
 # Empty other uses the detected product name.
 codex = ">"
@@ -909,6 +934,7 @@ branch = "├─"
 last_branch = "└─"
 attention = "!"
 working = "●"
+completed = "✓"
 waiting = "○"
 unknown = "?"
 
@@ -922,6 +948,7 @@ thread = "default"
 workdir = "dim"
 attention = "red"
 working = "green"
+completed = "bright_cyan"
 waiting = "yellow"
 unknown = "dim"
 

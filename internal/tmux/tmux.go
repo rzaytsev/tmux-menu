@@ -10,6 +10,24 @@ import (
 
 const sep = "\x1f"
 
+var paneFormatFields = []string{
+	"session_name",
+	"session_id",
+	"window_name",
+	"window_id",
+	"window_index",
+	"pane_index",
+	"pane_id",
+	"pane_title",
+	"pane_current_command",
+	"pane_current_path",
+	"pane_active",
+	"window_active",
+	"pane_pid",
+	"automatic-rename",
+	"session_path",
+}
+
 type Pane struct {
 	SessionName     string
 	SessionID       string
@@ -29,12 +47,17 @@ type Pane struct {
 }
 
 func Run(ctx context.Context, args ...string) (string, error) {
+	out, err := runRaw(ctx, args...)
+	return strings.TrimRight(out, "\n"), err
+}
+
+func runRaw(ctx context.Context, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "tmux", args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("tmux %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
-	return strings.TrimRight(string(out), "\n"), nil
+	return string(out), nil
 }
 
 func Exec(ctx context.Context, args ...string) error {
@@ -47,24 +70,17 @@ func Display(ctx context.Context, format string) (string, error) {
 }
 
 func ListPanes(ctx context.Context) ([]Pane, error) {
-	format := strings.Join([]string{
-		"#{session_name}",
-		"#{session_id}",
-		"#{window_name}",
-		"#{window_id}",
-		"#{window_index}",
-		"#{pane_index}",
-		"#{pane_id}",
-		"#{pane_title}",
-		"#{pane_current_command}",
-		"#{pane_current_path}",
-		"#{pane_active}",
-		"#{window_active}",
-		"#{pane_pid}",
-		"#{automatic-rename}",
-		"#{session_path}",
-	}, sep)
-	out, err := Run(ctx, "list-panes", "-a", "-F", format)
+	var format strings.Builder
+	for _, field := range paneFormatFields {
+		format.WriteString("#{n:")
+		format.WriteString(field)
+		format.WriteByte('}')
+		format.WriteString(sep)
+		format.WriteString("#{")
+		format.WriteString(field)
+		format.WriteByte('}')
+	}
+	out, err := runRaw(ctx, "list-panes", "-a", "-F", format.String())
 	if err != nil {
 		return nil, err
 	}
@@ -73,45 +89,66 @@ func ListPanes(ctx context.Context) ([]Pane, error) {
 
 func ParsePanes(out string) []Pane {
 	var panes []Pane
-	for _, line := range strings.Split(out, "\n") {
-		if strings.TrimSpace(line) == "" {
-			continue
+	for offset := 0; offset < len(out); {
+		parts, next, ok := parsePaneFields(out, offset)
+		if !ok {
+			break
 		}
-		parts := strings.Split(line, sep)
-		if len(parts) < 12 {
-			continue
-		}
-		panePID := ""
-		if len(parts) > 12 {
-			panePID = parts[12]
-		}
-		automaticRename := false
-		if len(parts) > 13 {
-			automaticRename = parts[13] == "1"
-		}
-		sessionPath := ""
-		if len(parts) > 14 {
-			sessionPath = parts[14]
-		}
+		offset = next
 		panes = append(panes, Pane{
 			SessionName:     parts[0],
 			SessionID:       parts[1],
-			SessionPath:     sessionPath,
+			SessionPath:     parts[14],
 			WindowName:      parts[2],
 			WindowID:        parts[3],
 			WindowIndex:     parts[4],
 			PaneIndex:       parts[5],
 			PaneID:          parts[6],
-			PanePID:         panePID,
+			PanePID:         parts[12],
 			PaneTitle:       parts[7],
 			CurrentCommand:  parts[8],
 			CurrentPath:     parts[9],
 			PaneActive:      parts[10] == "1",
 			WindowActive:    parts[11] == "1",
-			AutomaticRename: automaticRename,
+			AutomaticRename: parts[13] == "1",
 		})
 	}
 	return panes
+}
+
+func parsePaneFields(out string, offset int) ([]string, int, bool) {
+	parts := make([]string, len(paneFormatFields))
+	for index := range parts {
+		separator := strings.IndexByte(out[offset:], sep[0])
+		if separator <= 0 {
+			return nil, offset, false
+		}
+		separator += offset
+		lengthText := out[offset:separator]
+		for _, digit := range lengthText {
+			if digit < '0' || digit > '9' {
+				return nil, offset, false
+			}
+		}
+		length, err := strconv.Atoi(lengthText)
+		if err != nil || length < 0 {
+			return nil, offset, false
+		}
+		fieldStart := separator + len(sep)
+		fieldEnd := fieldStart + length
+		if fieldEnd < fieldStart || fieldEnd > len(out) {
+			return nil, offset, false
+		}
+		parts[index] = out[fieldStart:fieldEnd]
+		offset = fieldEnd
+	}
+	if offset == len(out) {
+		return parts, offset, true
+	}
+	if out[offset] != '\n' {
+		return nil, offset, false
+	}
+	return parts, offset + 1, true
 }
 
 func CapturePane(ctx context.Context, paneID string, lines int) (string, error) {
