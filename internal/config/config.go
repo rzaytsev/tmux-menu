@@ -1,9 +1,11 @@
 package config
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +19,13 @@ const configFileName = ".tmux-menu.conf"
 const DefaultSessionColor = "cyan"
 const SessionColorOptions = "default, black, red, green, yellow, blue, magenta, cyan, white, bright_black, bright_red, bright_green, bright_yellow, bright_blue, bright_magenta, bright_cyan, bright_white, orange"
 const AgentColorOptions = SessionColorOptions + ", dim"
+
+const maxConfigFileBytes = 1 << 20
+
+var (
+	ErrConfigBudget = errors.New("config read budget exceeded")
+	ErrUnsafeConfig = errors.New("unsafe config file")
+)
 
 type Config struct {
 	Palette   PaletteConfig   `json:"palette" toml:"palette"`
@@ -299,6 +308,24 @@ func LoadForContext(currentDir string, sessionRoot string) (Config, error) {
 	return cfg, Validate(cfg)
 }
 
+// LoadForContextBounded applies the normal config layers while checking
+// cancellation, rejecting non-regular files, and reserving every file from a
+// caller-owned aggregate byte budget.
+func LoadForContextBounded(ctx context.Context, currentDir string, sessionRoot string, consume func(int) bool) (Config, error) {
+	cfg := Default()
+	for _, path := range configPaths(currentDir, sessionRoot) {
+		if err := loadConfigFileBounded(ctx, path, &cfg, consume); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return Config{}, err
+		}
+	}
+	normalizeConfig(&cfg)
+	applyDefaults(&cfg)
+	return cfg, Validate(cfg)
+}
+
 func configPaths(currentDir string, sessionRoot string) []string {
 	if currentDir == "" {
 		currentDir, _ = os.Getwd()
@@ -331,6 +358,57 @@ func loadConfigFile(path string, cfg *Config) error {
 	if err != nil {
 		return err
 	}
+	return decodeConfigFile(path, b, cfg)
+}
+
+func loadConfigFileBounded(ctx context.Context, path string, cfg *Config, consume func(int) bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Size() < 0 || info.Size() > maxConfigFileBytes {
+		return ErrUnsafeConfig
+	}
+	if consume != nil && !consume(int(info.Size())) {
+		return ErrConfigBudget
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	opened, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if !opened.Mode().IsRegular() || opened.Size() != info.Size() || !os.SameFile(info, opened) {
+		return ErrUnsafeConfig
+	}
+	b := make([]byte, 0, int(info.Size()))
+	buffer := make([]byte, 32<<10)
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		n, readErr := f.Read(buffer)
+		b = append(b, buffer[:n]...)
+		if len(b) > maxConfigFileBytes {
+			return ErrUnsafeConfig
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			return readErr
+		}
+	}
+	return decodeConfigFile(path, b, cfg)
+}
+
+func decodeConfigFile(path string, b []byte, cfg *Config) error {
 	if filepath.Ext(path) == ".json" {
 		var next Config
 		if err := json.Unmarshal(b, &next); err != nil {

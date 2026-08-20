@@ -1454,6 +1454,61 @@ func TestRunPopupAcceptsBookmarksMode(t *testing.T) {
 	}
 }
 
+func TestRunAgentsCommandRoutesHUDPickerAndRejectsUnknownArguments(t *testing.T) {
+	oldHUD := runAgentHUDSurface
+	oldPicker := runAgentPickerSurface
+	defer func() { runAgentHUDSurface, runAgentPickerSurface = oldHUD, oldPicker }()
+
+	hudCalls, pickerCalls := 0, 0
+	runAgentHUDSurface = func(context.Context) error {
+		hudCalls++
+		return nil
+	}
+	runAgentPickerSurface = func(context.Context) error {
+		pickerCalls++
+		return nil
+	}
+
+	if err := runAgentsCommand(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := runAgentsCommand(context.Background(), []string{"--picker"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"--bad"}, {"--picker", "extra"}} {
+		if err := runAgentsCommand(context.Background(), args); err == nil || !strings.Contains(err.Error(), "agents [--picker]") {
+			t.Fatalf("args %#v error = %v, want strict Agents usage", args, err)
+		}
+	}
+	if hudCalls != 1 || pickerCalls != 1 {
+		t.Fatalf("surface calls hud=%d picker=%d", hudCalls, pickerCalls)
+	}
+}
+
+func TestValidatePopupArgsRoutesAgentsHUDAndDirectPickerStrictly(t *testing.T) {
+	for _, args := range [][]string{{"agents"}, {"agents", "--picker"}} {
+		if err := validatePopupArgs(args); err != nil {
+			t.Fatalf("args %#v: %v", args, err)
+		}
+	}
+	for _, args := range [][]string{{"agents", "--bad"}, {"agents", "--picker", "extra"}} {
+		if err := validatePopupArgs(args); err == nil {
+			t.Fatalf("args %#v unexpectedly accepted", args)
+		}
+	}
+}
+
+func TestPopupAgentsViewAlwaysRelaunchesTopLevelHUD(t *testing.T) {
+	cfg := config.Default()
+	cfg.Popup.Width = cfg.Agents.PopupWidth
+	if !popupViewNeedsRelaunch(cfg, "palette", "agents") {
+		t.Fatal("Agents must relaunch the top-level HUD even when popup widths match")
+	}
+	if popupViewNeedsRelaunch(cfg, "palette", "tools") {
+		t.Fatal("same-width fzf views should remain in the existing popup")
+	}
+}
+
 func TestViewModeForKey(t *testing.T) {
 	cases := map[string]string{
 		"alt-1":  "palette",

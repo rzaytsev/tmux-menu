@@ -3,13 +3,15 @@
 ## What It Does
 
 `tmux-menu` is a small tmux utility for people who keep multiple projects,
-shells, and coding agents open at once. It uses `tmux display-popup` and
-`fzf --ansi`; there is no custom TUI framework.
+shells, and coding agents open at once. Picker views use `tmux display-popup`
+and `fzf --ansi`. The continuously refreshing Agents monitor is the one custom
+Bubble Tea view because a persistent multi-pane layout is outside fzf's model.
 
 Views:
 
 - `palette`: switch to configured tmux sessions, panes, and optionally agents.
-- `agents`: switch to panes running agent-like commands with status badges.
+- `agents`: monitor live agent output, status, attention, and timing; delegate
+  fuzzy switching to the existing fzf picker.
 - `tools`: run configured commands, Makefile targets, and quick directory jumps.
 - `projects`: create or switch tmux sessions for project directories.
 - `links`: open URLs and file references captured from pane scrollback.
@@ -23,6 +25,7 @@ Popup commands:
 ```sh
 tmux-menu popup palette
 tmux-menu popup agents
+tmux-menu popup agents --picker
 tmux-menu popup tools
 tmux-menu popup projects
 tmux-menu popup links
@@ -35,6 +38,7 @@ Non-popup commands are also available:
 ```sh
 tmux-menu palette
 tmux-menu agents
+tmux-menu agents --picker
 tmux-menu tools
 tmux-menu projects
 tmux-menu links
@@ -43,7 +47,38 @@ tmux-menu status
 tmux-menu sample-config
 ```
 
-Inside picker views:
+Optional identity-bound provider metadata:
+
+```sh
+tmux-menu agent-hook snippets [codex|claude] [ingest|trace]
+tmux-menu agent-hook doctor
+tmux-menu agent-hook snapshot
+```
+
+`snippets` prints reviewable provider configuration without editing it.
+`doctor` checks the active hook wiring read-only. `snapshot` emits current live
+agent metadata only; it never includes terminal output, prompts, model prose,
+tool payloads, cwd, or a transcript. `trace` is an opt-in metadata-only
+diagnostic mode.
+
+Inside the Agent HUD:
+
+- arrows or `h`, `j`, `k`, `l`: move selection
+- `[` / `]`: previous/next page
+- `n`: select the next attention item across all pages
+- `z`: toggle focused terminal view
+- `?`: toggle full help
+- `/`: suspend the HUD and open the fzf Agents picker
+- `Enter`: switch to the exact selected live pane
+- `q`: quit
+
+Canceling the picker opened with `/` resumes the same HUD selection, page, and
+focus when that pane is still live. Canceling `agents --picker` exits directly.
+The picker retains `Ctrl-R` refresh and `Ctrl-X` exact completion
+acknowledgement; HUD-native keys never acknowledge, approve, or type into an
+agent.
+
+Inside fzf picker views:
 
 - `Tab`: next view in `picker.tab_order`
 - `Shift-Tab`: previous view in `picker.tab_order`
@@ -203,7 +238,7 @@ sections = ["sessions", "panes"]
 
 ### `session`
 
-- `color`: bold session-header color in the agents tree. Valid values are
+- `color`: bold session-label color in the Agent HUD and direct picker. Valid values are
   `default`, `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `white`,
   `bright_black`, `bright_red`, `bright_green`, `bright_yellow`, `bright_blue`,
   `bright_magenta`, `bright_cyan`, `bright_white`, and `orange`. The built-in
@@ -219,15 +254,22 @@ color = "red"
 
 ### `agents`
 
-`[agents.icons]` configures every symbolic part of agent rows: `codex`,
-`claude`, `other`, `current`, `branch`, `last_branch`, `attention`, `working`,
-`waiting`, and `unknown`. An empty `other` keeps the detected product name.
+`agents.popup_width` controls the dedicated HUD and Agents-picker popup width;
+the default is `100%`. V1 has no refresh, capture, or layout configuration.
+
+`[agents.icons]` configures every symbolic part of the HUD and agent rows:
+`codex`, `claude`, `other`, `current`, `branch`, `last_branch`, `attention`,
+`working`, `completed`, `waiting`, and `unknown`. An empty `other` keeps the
+detected product name.
 
 `[agents.colors]` configures `codex`, `claude`, `other`, `branch`, `thread`,
-`workdir`, `attention`, `working`, `waiting`, and `unknown`. Colors accept every
-`session.color` value plus `dim`.
+`workdir`, `attention`, `working`, `completed`, `waiting`, and `unknown`. Colors
+accept every `session.color` value plus `dim`.
 
 ```toml
+[agents]
+popup_width = "100%"
+
 [agents.icons]
 codex = ">"
 claude = "✳"
@@ -237,6 +279,7 @@ branch = "├─"
 last_branch = "└─"
 attention = "!"
 working = "●"
+completed = "✓"
 waiting = "○"
 unknown = "?"
 
@@ -249,6 +292,7 @@ thread = "default"
 workdir = "dim"
 attention = "red"
 working = "green"
+completed = "bright_cyan"
 waiting = "yellow"
 unknown = "dim"
 ```
@@ -429,20 +473,55 @@ roots = ["~/projects", "~/work"]
 
 ### Keep Coding Agents Visible
 
-Use `agents` when you run agents in separate panes. tmux-menu detects known
-agent commands and uses pane/window titles for richer status when available.
-The picker groups agents under tmux session headers. Headers are display-only,
-omit window/pane indexes, and use the session root's `[session].color`.
-Selectable child rows contain a compact status sign, a blue Codex `>` or
-orange Claude `✳` mark, the thread name, and workdir; other detected agents use
-their product name. These are defaults configurable under `[agents]`. Generic
-foreground commands such as `node` are hidden.
-Displayed workdirs omit the common `~/projects/` prefix.
-Status signs are green `●` for working, yellow `○` for waiting, bold red `!`
-for attention, or dim `?` for unknown. The current agent thread name is prefixed
-with `*` without a separating space. UUID-shaped agent titles and tmux session
-names show only their first segment, and a right-side preview follows the latest
-scrollback lines from the selected pane.
+Run `tmux-menu popup agents` when each agent has its own tmux pane. The HUD
+discovers live panes continuously, shows at most four bounded terminal tails per
+page, and keeps surviving pane IDs in stable cells when status changes. Narrow
+popups reduce the grid to one selected terminal. `z` focuses that terminal,
+`n` jumps to attention anywhere in the inventory, and the summary keeps
+cross-page status counts visible.
+
+Status is normalized as `attention`, `working`, `completed`, `waiting`, or
+`unknown`. Codex and Claude hook evidence takes precedence only while it still
+matches the live tmux server, pane ID/PID, session, provider, provider session,
+and provider-process incarnation. Titles and process state provide restricted
+fallbacks. Stored hook evidence never creates a row without a live pane.
+
+The optional clocks have distinct meanings:
+
+- `turn`: elapsed time since the current trusted provider turn began
+- `state`: time spent in the current normalized state
+- `event`: age since the last trusted provider event
+
+Missing hook timestamps are omitted; tmux-menu does not estimate tokens, cost,
+context use, task percent, tool counts, or file ownership. Child counts are
+rolled up only when fresh authoritative metadata exists.
+
+Each refresh is observational and serial. A disposable-socket baseline completed
+inventory and styled capture below the timer's 0.01s display resolution; v1 uses
+a conservative 900 ms generation deadline and starts the next generation about
+one second after completion. It captures only the current
+page (maximum four panes) or the focused pane, up to 200 lines and 256 KiB per
+pane, under a 13 MiB shared output budget and a 256 KiB retained terminal
+budget. The generation charges pane/process output plus bounded hook/config
+reads to that cap, and rechecks pane ID/PID after capture before accepting a
+tail. Hidden pages retain no terminal tail. A failed pane capture keeps the
+last safe tail with a visible stale marker; vanished or reused identities drop
+their retained tail on the next inventory refresh. HUD polling never deletes
+hook state.
+
+Terminal content stays in bounded HUD memory and is never written to hook
+state, trace files, snapshot JSON, or a transcript store. Every captured or
+configured display string is sanitized before model state: printable text and
+passive SGR styling may remain, while clipboard/title/hyperlink, cursor,
+screen-control, string-control, bidi-control, invalid UTF-8, and neighboring
+cell effects are neutralized. Rendering resets style at every line and cell
+boundary.
+
+Press Enter or choose through `/` to switch. Dispatch uses hidden stable IDs and
+revalidates the exact session, window, pane, and pane PID immediately before the
+tmux mutation. A malformed, moved, reused, or vanished identity fails closed;
+visible labels and indexes are never fallbacks. Use `agents --picker` or
+`popup agents --picker` when only fuzzy search and switch are needed.
 
 In the main palette, panes in windows with `automatic-rename` disabled are
 shown as `<window name> | <pane title>`. The window name repeats for split panes

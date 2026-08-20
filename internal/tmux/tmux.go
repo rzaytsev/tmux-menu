@@ -42,6 +42,27 @@ func (b *OutputBudget) Used() int64 {
 	return b.used.Load()
 }
 
+// Consume reserves all size bytes or none. It lets bounded filesystem readers
+// participate in the same generation budget as command output.
+func (b *OutputBudget) Consume(size int) bool {
+	if size < 0 || b == nil {
+		return false
+	}
+	if size == 0 {
+		return true
+	}
+	want := int64(size)
+	for {
+		used := b.used.Load()
+		if want > b.limit-used {
+			return false
+		}
+		if b.used.CompareAndSwap(used, used+want) {
+			return true
+		}
+	}
+}
+
 func (b *OutputBudget) reserve(size int) int {
 	if b == nil || size <= 0 {
 		return 0
@@ -371,6 +392,20 @@ func CapturePaneBounded(ctx context.Context, budget *OutputBudget, paneID string
 	start := "-" + strconv.Itoa(lines)
 	out, err := runRawBounded(ctx, budget, maxBytes, "capture-pane", "-e", "-p", "-S", start, "-t", paneID)
 	return strings.TrimRight(out, "\n"), err
+}
+
+// IsCanonicalID reports whether value is a tmux stable ID with no alternate
+// decimal spelling, such as $1, @2, or %3.
+func IsCanonicalID(value string, prefix byte) bool {
+	if len(value) < 2 || value[0] != prefix || len(value) > 2 && value[1] == '0' {
+		return false
+	}
+	for _, digit := range value[1:] {
+		if digit < '0' || digit > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func canonicalPaneID(value string) bool {

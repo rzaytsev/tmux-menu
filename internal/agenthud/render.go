@@ -467,7 +467,7 @@ func joinText(values ...Text) Text {
 	var result Text
 	for _, value := range values {
 		for _, part := range value.spans {
-			appendParsed(&result.spans, part.text, part.style)
+			appendParsed(&result.spans, string(part.text), part.style)
 		}
 		result.width += value.width
 		result.bytes += value.bytes

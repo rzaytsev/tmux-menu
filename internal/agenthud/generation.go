@@ -36,12 +36,10 @@ type CaptureResult struct {
 type Coordinator struct {
 	mu     sync.Mutex
 	active bool
-	nextID uint64
 	limits GenerationLimits
 }
 
 type Generation struct {
-	id          uint64
 	ctx         context.Context
 	cancel      context.CancelFunc
 	budget      *tmux.OutputBudget
@@ -61,10 +59,8 @@ func (c *Coordinator) Begin(parent context.Context) (*Generation, bool) {
 		return nil, false
 	}
 	c.active = true
-	c.nextID++
 	ctx, cancel := context.WithTimeout(parent, c.limits.Timeout)
 	return &Generation{
-		id:          c.nextID,
 		ctx:         ctx,
 		cancel:      cancel,
 		budget:      tmux.NewOutputBudget(c.limits.TotalOutputBytes),

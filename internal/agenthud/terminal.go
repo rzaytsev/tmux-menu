@@ -6,6 +6,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/mattn/go-runewidth"
 )
 
 const (
@@ -35,7 +36,7 @@ type Terminal struct {
 }
 
 type span struct {
-	text  string
+	text  []byte
 	style style
 }
 
@@ -91,7 +92,7 @@ func (t Text) Plain() string {
 	var out strings.Builder
 	out.Grow(t.bytes)
 	for _, part := range t.spans {
-		out.WriteString(part.text)
+		out.Write(part.text)
 	}
 	return out.String()
 }
@@ -105,7 +106,7 @@ func (t Text) ANSI() string {
 			out.WriteString(part.style.ansi())
 			current = part.style
 		}
-		out.WriteString(part.text)
+		out.Write(part.text)
 	}
 	out.WriteString("\x1b[0m")
 	return out.String()
@@ -189,9 +190,8 @@ func parseTerminal(raw []byte, maxInput int, flatten bool) [][]span {
 			if isUnsafeRune(r) {
 				continue
 			}
-			text := string(r)
-			appendParsed(&lines[len(lines)-1], text, current)
-			lineWidth += ansi.StringWidth(text)
+			appendParsedRune(&lines[len(lines)-1], r, current)
+			lineWidth += runewidth.RuneWidth(r)
 		}
 	}
 	return lines
@@ -203,10 +203,19 @@ func appendParsed(parts *[]span, text string, value style) {
 	}
 	last := len(*parts) - 1
 	if last >= 0 && (*parts)[last].style == value {
-		(*parts)[last].text += text
+		(*parts)[last].text = append((*parts)[last].text, text...)
 		return
 	}
-	*parts = append(*parts, span{text: text, style: value})
+	*parts = append(*parts, span{text: append([]byte(nil), text...), style: value})
+}
+
+func appendParsedRune(parts *[]span, value rune, current style) {
+	last := len(*parts) - 1
+	if last < 0 || (*parts)[last].style != current {
+		*parts = append(*parts, span{style: current})
+		last++
+	}
+	(*parts)[last].text = utf8.AppendRune((*parts)[last].text, value)
 }
 
 func clipLine(parts []span, maxWidth, maxBytes int) Text {
@@ -215,7 +224,7 @@ func clipLine(parts []span, maxWidth, maxBytes int) Text {
 	}
 	var result Text
 	for _, part := range parts {
-		for remaining := part.text; remaining != ""; {
+		for remaining := string(part.text); remaining != ""; {
 			cluster, width := ansi.FirstGraphemeCluster(remaining, ansi.GraphemeWidth)
 			if cluster == "" {
 				break

@@ -36,6 +36,7 @@ const (
 type agentRow struct {
 	pane             tmux.Pane
 	provider         agentstatus.Provider
+	providerPID      int
 	providerSession  string
 	status           agentStatus
 	name             string
@@ -97,16 +98,34 @@ func loadAgentInventoryBounded(ctx context.Context, fallbackSessionColor string,
 	return agentInventoryForPanesBounded(ctx, panes, fallbackSessionColor, now, budget)
 }
 
+func loadAgentInventoryBoundedReadOnly(ctx context.Context, fallbackSessionColor string, now time.Time, budget *tmux.OutputBudget) (agentInventory, error) {
+	panes, err := tmux.ListPanesBounded(ctx, budget, tmux.DefaultPaneListLimits())
+	if err != nil {
+		return agentInventory{}, err
+	}
+	return agentInventoryForPanesBoundedMode(ctx, panes, fallbackSessionColor, now, budget, true)
+}
+
 func agentInventoryForPanes(ctx context.Context, panes []tmux.Pane, fallbackSessionColor string, now time.Time) (agentInventory, error) {
 	return agentInventoryForPanesBounded(ctx, panes, fallbackSessionColor, now, tmux.NewOutputBudget(agentProcessOutputBytes))
 }
 
 func agentInventoryForPanesBounded(ctx context.Context, panes []tmux.Pane, fallbackSessionColor string, now time.Time, budget *tmux.OutputBudget) (agentInventory, error) {
+	return agentInventoryForPanesBoundedMode(ctx, panes, fallbackSessionColor, now, budget, false)
+}
+
+func agentInventoryForPanesBoundedMode(ctx context.Context, panes []tmux.Pane, fallbackSessionColor string, now time.Time, budget *tmux.OutputBudget, readOnly bool) (agentInventory, error) {
 	panes = validLiveAgentPanes(panes)
 	snapshot := loadAgentProcessSnapshotBounded(ctx, panes, budget)
-	annotations := loadAgentHookAnnotations(ctx, panes, snapshot, now)
+	annotations := loadAgentHookAnnotationsMode(ctx, panes, snapshot, now, readOnly, budget)
 	rows := agentRowsForPanes(panes, snapshot, annotations)
-	sessionColors, err := loadAgentSessionColors(agentPanesFromRows(rows), fallbackSessionColor)
+	var sessionColors map[string]string
+	var err error
+	if readOnly {
+		sessionColors, err = loadAgentSessionColorsBounded(ctx, agentPanesFromRows(rows), fallbackSessionColor, budget)
+	} else {
+		sessionColors, err = loadAgentSessionColors(agentPanesFromRows(rows), fallbackSessionColor)
+	}
 	if err != nil {
 		return agentInventory{}, err
 	}
@@ -128,7 +147,7 @@ func validLiveAgentPanes(panes []tmux.Pane) []tmux.Pane {
 }
 
 func validLiveAgentPane(pane tmux.Pane) bool {
-	if !canonicalTmuxID(pane.SessionID, '$') || !canonicalTmuxID(pane.WindowID, '@') || !canonicalTmuxID(pane.PaneID, '%') || !canonicalPositiveDecimal(pane.PanePID) {
+	if !tmux.IsCanonicalID(pane.SessionID, '$') || !tmux.IsCanonicalID(pane.WindowID, '@') || !tmux.IsCanonicalID(pane.PaneID, '%') || !canonicalPositiveDecimal(pane.PanePID) {
 		return false
 	}
 	for _, field := range []string{
@@ -140,10 +159,6 @@ func validLiveAgentPane(pane tmux.Pane) bool {
 		}
 	}
 	return true
-}
-
-func canonicalTmuxID(value string, prefix byte) bool {
-	return len(value) > 1 && value[0] == prefix && canonicalUnsignedDecimal(value[1:])
 }
 
 func canonicalPositiveDecimal(value string) bool {
@@ -167,6 +182,10 @@ func canonicalUnsignedDecimal(value string) bool {
 }
 
 func loadAgentHookAnnotations(ctx context.Context, panes []tmux.Pane, snapshot processSnapshot, now time.Time) map[string]agentstatus.Annotation {
+	return loadAgentHookAnnotationsMode(ctx, panes, snapshot, now, false, nil)
+}
+
+func loadAgentHookAnnotationsMode(ctx context.Context, panes []tmux.Pane, snapshot processSnapshot, now time.Time, readOnly bool, budget *tmux.OutputBudget) map[string]agentstatus.Annotation {
 	if strings.TrimSpace(os.Getenv("TMUX")) == "" {
 		return nil
 	}
@@ -190,7 +209,16 @@ func loadAgentHookAnnotations(ctx context.Context, panes []tmux.Pane, snapshot p
 			Provider: provider,
 		})
 	}
-	annotations, _ := store.Snapshot(ctx, live, now)
+	var annotations []agentstatus.Annotation
+	if readOnly {
+		var consume func(int) bool
+		if budget != nil {
+			consume = budget.Consume
+		}
+		annotations, _ = store.SnapshotReadOnly(ctx, live, now, consume)
+	} else {
+		annotations, _ = store.Snapshot(ctx, live, now)
+	}
 	byPane := make(map[string]agentstatus.Annotation, len(annotations))
 	for _, annotation := range annotations {
 		if annotation.Pane.PaneID != "" {
@@ -236,7 +264,11 @@ func agentRowsForPanes(panes []tmux.Pane, snapshot processSnapshot, annotations 
 		}
 		status := agentPaneStatusForProvider(pane, snapshot, provider)
 		source, rawEvent := agentFallbackEvidence(pane, snapshot, provider)
-		row := agentRow{pane: pane, provider: provider, status: status, name: name, statusSource: source, rawEvent: rawEvent, fresh: true}
+		providerPID := snapshot.providerPIDs[panePID][provider]
+		if claimed && annotation.Pane.ProviderPID > 0 {
+			providerPID = annotation.Pane.ProviderPID
+		}
+		row := agentRow{pane: pane, provider: provider, providerPID: providerPID, status: status, name: name, statusSource: source, rawEvent: rawEvent, fresh: true}
 		if claimed {
 			if hookStatus, authoritative := agentStatusFromAnnotation(annotation, pane, snapshot); authoritative {
 				row.status = hookStatus
@@ -408,11 +440,13 @@ func agentItemsForRows(rows []agentRow, currentPaneID string, sessionColors map[
 		if count := len(row.children); count > 0 {
 			label += "  " + dim(fmt.Sprintf("+%d", count))
 		}
+		switchDispatch := action.SwitchPane(row.pane)
+		switchDispatch.ProviderPID = row.providerPID
 		items = append(items, picker.Item[menuItem]{
 			Label:   label,
 			Preview: row.pane.PaneID,
 			Value: menuItem{
-				dispatch:      action.SwitchPane(row.pane),
+				dispatch:      switchDispatch,
 				agentPaneID:   row.pane.PaneID,
 				agentAckToken: row.acknowledgeToken,
 			},
@@ -527,6 +561,30 @@ func loadAgentSessionColors(panes []tmux.Pane, fallback string) (map[string]stri
 		color := fallback
 		if p.SessionPath != "" {
 			cfg, err := config.LoadForContext(p.SessionPath, p.SessionPath)
+			if err != nil {
+				return nil, fmt.Errorf("load config for session %q: %w", p.SessionName, err)
+			}
+			color = cfg.Session.Color
+		}
+		colors[key] = color
+	}
+	return colors, nil
+}
+
+func loadAgentSessionColorsBounded(ctx context.Context, panes []tmux.Pane, fallback string, budget *tmux.OutputBudget) (map[string]string, error) {
+	colors := make(map[string]string)
+	var consume func(int) bool
+	if budget != nil {
+		consume = budget.Consume
+	}
+	for _, p := range panes {
+		key := paneSessionKey(p)
+		if _, ok := colors[key]; ok {
+			continue
+		}
+		color := fallback
+		if p.SessionPath != "" {
+			cfg, err := config.LoadForContextBounded(ctx, p.SessionPath, p.SessionPath, consume)
 			if err != nil {
 				return nil, fmt.Errorf("load config for session %q: %w", p.SessionName, err)
 			}
@@ -893,13 +951,15 @@ func buildProcessSnapshot(processes []processInfo) processSnapshot {
 	names := make(map[int]string)
 	providerPIDs := make(map[int]map[agentstatus.Provider]int)
 	visiting := make(map[int]bool)
+	scanned := make(map[int]bool)
 	var scan func(int) (bool, bool, string)
 	scan = func(pid int) (bool, bool, string) {
-		if roots[pid] {
-			return true, statuses[pid] == agentStatusWorking, names[pid]
+		if scanned[pid] {
+			return roots[pid], statuses[pid] == agentStatusWorking, names[pid]
 		}
 		if name := agents[pid]; name != "" {
 			roots[pid] = true
+			scanned[pid] = true
 			names[pid] = name
 			provider := agentProviderForName(name)
 			if provider != "" {
@@ -948,6 +1008,7 @@ func buildProcessSnapshot(processes []processInfo) processSnapshot {
 				statuses[pid] = agentStatusWaiting
 			}
 		}
+		scanned[pid] = true
 		return found, working, name
 	}
 	for _, p := range processes {

@@ -79,6 +79,51 @@ func TestStoreNeverAcknowledgesAttention(t *testing.T) {
 	}
 }
 
+func TestSnapshotReadOnlyDoesNotReconcileMismatchedRecords(t *testing.T) {
+	store := newCoreTestStore(t, testPolicy())
+	now := time.Date(2026, 8, 12, 13, 0, 0, 0, time.UTC)
+	event := coreEvent(EventTurnStart, "turn-1", now)
+	applyCore(t, store, event)
+	path := store.recordPath(recordKey(event.Pane, event.Provider))
+
+	live := event.Pane
+	live.ProviderPID++
+	annotations, problems := store.SnapshotReadOnly(context.Background(), []LivePane{{Pane: live, Provider: event.Provider}}, now.Add(time.Second), nil)
+	if len(annotations) != 0 || len(problems) != 0 {
+		t.Fatalf("read-only mismatch = %+v, problems=%v", annotations, problems)
+	}
+	if _, err := os.Lstat(path); err != nil {
+		t.Fatalf("read-only snapshot removed hook record: %v", err)
+	}
+}
+
+func TestSnapshotReadOnlyOnlyReadsBoundedLiveRecordPaths(t *testing.T) {
+	store := newCoreTestStore(t, testPolicy())
+	now := time.Date(2026, 8, 12, 13, 0, 0, 0, time.UTC)
+	event := coreEvent(EventTurnStart, "turn-1", now)
+	applyCore(t, store, event)
+	if err := os.WriteFile(filepath.Join(store.root, strings.Repeat("f", 64)+recordSuffix), []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	reserved := 0
+	consume := func(size int) bool {
+		reserved += size
+		return reserved <= maxStateFile
+	}
+	annotations, problems := store.SnapshotReadOnly(context.Background(), []LivePane{{Pane: event.Pane, Provider: event.Provider}}, now.Add(time.Second), consume)
+	if len(problems) != 0 || len(annotations) != 1 || reserved <= 0 || reserved > maxStateFile {
+		t.Fatalf("bounded read-only snapshot = %+v, problems=%v reserved=%d", annotations, problems, reserved)
+	}
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	annotations, problems = store.SnapshotReadOnly(canceled, []LivePane{{Pane: event.Pane, Provider: event.Provider}}, now.Add(time.Second), consume)
+	if len(annotations) != 0 || len(problems) != 1 || !errors.Is(problems[0], context.Canceled) {
+		t.Fatalf("canceled read-only snapshot = %+v, problems=%v", annotations, problems)
+	}
+}
+
 func TestStoreChildCompletionRollupIsCASAcknowledgeable(t *testing.T) {
 	store := newCoreTestStore(t, testPolicy())
 	ctx := context.Background()

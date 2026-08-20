@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"tmux-menu/internal/agentstatus"
+	"tmux-menu/internal/tmux"
 )
 
 const defaultModelTerminalBytes = 256 << 10
@@ -18,26 +19,10 @@ type Identity struct {
 }
 
 func NewIdentity(sessionID, windowID, paneID string, panePID, providerPID int) (Identity, error) {
-	if !canonicalID(sessionID, '$') || !canonicalID(windowID, '@') || !canonicalID(paneID, '%') || panePID <= 0 || providerPID < 0 {
+	if !tmux.IsCanonicalID(sessionID, '$') || !tmux.IsCanonicalID(windowID, '@') || !tmux.IsCanonicalID(paneID, '%') || panePID <= 0 || providerPID < 0 {
 		return Identity{}, fmt.Errorf("invalid stable tmux identity")
 	}
 	return Identity{sessionID: sessionID, windowID: windowID, paneID: paneID, panePID: panePID, providerPID: providerPID}, nil
-}
-
-func canonicalID(value string, prefix byte) bool {
-	if len(value) < 2 || value[0] != prefix {
-		return false
-	}
-	digits := value[1:]
-	if len(digits) > 1 && digits[0] == '0' {
-		return false
-	}
-	for _, digit := range digits {
-		if digit < '0' || digit > '9' {
-			return false
-		}
-	}
-	return true
 }
 
 func (i Identity) SessionID() string { return i.sessionID }
@@ -46,7 +31,7 @@ func (i Identity) PaneID() string    { return i.paneID }
 func (i Identity) PanePID() int      { return i.panePID }
 func (i Identity) ProviderPID() int  { return i.providerPID }
 func (i Identity) Valid() bool {
-	return canonicalID(i.sessionID, '$') && canonicalID(i.windowID, '@') && canonicalID(i.paneID, '%') && i.panePID > 0 && i.providerPID >= 0
+	return tmux.IsCanonicalID(i.sessionID, '$') && tmux.IsCanonicalID(i.windowID, '@') && tmux.IsCanonicalID(i.paneID, '%') && i.panePID > 0 && i.providerPID >= 0
 }
 
 type AgentPresentation struct {
@@ -131,8 +116,6 @@ type RefreshResult struct {
 
 type CaptureTarget struct {
 	Identity Identity
-	Width    int
-	Height   int
 }
 
 type RefreshRequest struct {
@@ -158,6 +141,7 @@ type ModelOptions struct {
 }
 
 type tailState struct {
+	identity Identity
 	terminal Terminal
 	stale    bool
 	failure  Text
@@ -196,20 +180,11 @@ func NewModel(options ModelOptions) Model {
 
 func (m *Model) BeginRefresh() RefreshRequest {
 	m.latestGeneration++
-	layout := m.currentLayout()
 	visible := m.visiblePaneIDs()
 	targets := make([]CaptureTarget, 0, len(visible))
-	for index, paneID := range visible {
-		if index >= len(layout.Cells) {
-			break
-		}
+	for _, paneID := range visible {
 		agent := m.agents[paneID]
-		cell := layout.Cells[index]
-		targets = append(targets, CaptureTarget{
-			Identity: agent.identity,
-			Width:    max(cell.Width-2, 1),
-			Height:   max(cell.Height-4, 1),
-		})
+		targets = append(targets, CaptureTarget{Identity: agent.identity})
 	}
 	return RefreshRequest{Generation: m.latestGeneration, Targets: targets}
 }
@@ -225,6 +200,7 @@ func (m *Model) ApplyRefresh(result RefreshResult) bool {
 		m.refreshFailure = result.Failure
 		for _, paneID := range m.visiblePaneIDs() {
 			tail := m.tails[paneID]
+			tail.identity = m.agents[paneID].identity
 			tail.stale = true
 			tail.failure = result.Failure
 			m.tails[paneID] = tail
@@ -251,10 +227,11 @@ func (m *Model) ApplyRefresh(result RefreshResult) bool {
 		tail, hasTail := m.tails[paneID]
 		if update, ok := updates[paneID]; ok {
 			if update.Failed {
+				tail.identity = update.Identity
 				tail.stale = true
 				tail.failure = update.Failure
 			} else {
-				tail = tailState{terminal: update.Terminal}
+				tail = tailState{identity: update.Identity, terminal: update.Terminal}
 				hasTail = true
 			}
 		}
@@ -278,6 +255,9 @@ func (m *Model) reconcile(values []Agent) {
 		}
 		if _, duplicate := next[paneID]; duplicate {
 			continue
+		}
+		if previous, exists := m.agents[paneID]; exists && previous.identity != agent.identity {
+			delete(m.tails, paneID)
 		}
 		next[paneID] = agent
 		incoming = append(incoming, paneID)
@@ -514,7 +494,8 @@ func (m Model) RetainedTerminalBytes() int {
 
 func (m Model) NeedsVisibleCapture() bool {
 	for _, paneID := range m.visiblePaneIDs() {
-		if tail, ok := m.tails[paneID]; !ok || tail.terminal.LineCount() == 0 {
+		tail, ok := m.tails[paneID]
+		if !ok || tail.identity != m.agents[paneID].identity {
 			return true
 		}
 	}

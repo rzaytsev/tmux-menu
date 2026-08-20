@@ -104,6 +104,57 @@ func TestEmptyModelKeepsRefreshingAndAdmitsAgent(t *testing.T) {
 	}
 }
 
+func TestCompletedEmptyAndFailedCapturesWaitForNormalRefresh(t *testing.T) {
+	agent := testAgent(t, "%1", agentstatus.StateWorking)
+
+	for _, tc := range []struct {
+		name   string
+		update TerminalUpdate
+	}{
+		{name: "empty", update: TerminalUpdate{Identity: agent.Identity()}},
+		{name: "failed", update: TerminalUpdate{Identity: agent.Identity(), Failed: true, Failure: SanitizeText("pane vanished", 40)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			model := NewModel(ModelOptions{Width: 80, Height: 20})
+			applyAgents(t, &model, []Agent{agent})
+			if !model.NeedsVisibleCapture() {
+				t.Fatal("newly visible pane did not request an immediate capture")
+			}
+			request := model.BeginRefresh()
+			model.ApplyRefresh(RefreshResult{Generation: request.Generation, Agents: []Agent{agent}, Captures: []TerminalUpdate{tc.update}})
+			if model.NeedsVisibleCapture() {
+				t.Fatal("completed capture attempt would start a zero-delay refresh loop")
+			}
+		})
+	}
+}
+
+func TestPaneReincarnationDropsPriorTailAndRequestsFreshCapture(t *testing.T) {
+	model := NewModel(ModelOptions{Width: 80, Height: 20, MaxTerminalBytes: 4096})
+	oldAgent := testAgent(t, "%1", agentstatus.StateWorking)
+	request := model.BeginRefresh()
+	model.ApplyRefresh(RefreshResult{
+		Generation: request.Generation,
+		Agents:     []Agent{oldAgent},
+		Captures:   []TerminalUpdate{testTail(t, "%1", "old incarnation")},
+	})
+
+	identity, err := NewIdentity("$1", "@1", "%1", 999, 1001)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newAgent := NewAgent(AgentPresentation{Identity: identity, Status: agentstatus.StateWorking})
+	request = model.BeginRefresh()
+	model.ApplyRefresh(RefreshResult{Generation: request.Generation, Agents: []Agent{newAgent}})
+
+	if got, ok := model.TerminalPlain("%1"); ok || got != "" {
+		t.Fatalf("reincarnated pane retained terminal tail %q, ok=%v", got, ok)
+	}
+	if !model.NeedsVisibleCapture() {
+		t.Fatal("reincarnated pane did not request a fresh capture")
+	}
+}
+
 func TestRefreshFailureKeepsLastGoodSafeTailAndLateGenerationIsRejected(t *testing.T) {
 	model := NewModel(ModelOptions{Width: 80, Height: 20, MaxTerminalBytes: 4096})
 	first := model.BeginRefresh()

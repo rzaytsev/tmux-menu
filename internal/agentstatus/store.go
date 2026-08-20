@@ -22,6 +22,8 @@ const (
 	maxStateFile = 1 << 20
 )
 
+var ErrSnapshotBudget = errors.New("agent status snapshot budget exceeded")
+
 type Store struct {
 	root   string
 	policy Policy
@@ -123,6 +125,93 @@ func (s *Store) Snapshot(ctx context.Context, live []LivePane, now time.Time) ([
 			if removeErr := s.removeRecordIfStillOrphan(ctx, key, path, liveByKey); removeErr != nil {
 				problems = append(problems, removeErr)
 			}
+			continue
+		}
+		annotation := resolve(current, now, s.policy)
+		if annotation.State == StateUnknown && !annotation.Fresh && len(annotation.Children) == 0 {
+			continue
+		}
+		paneKey := annotation.Pane.ServerID + "\x00" + annotation.Pane.PaneID
+		selected, exists := annotationsByPane[paneKey]
+		preferred := liveProviderByPane[paneKey]
+		if !exists || annotation.Provider == preferred && selected.Provider != preferred ||
+			(annotation.Provider == selected.Provider || preferred == "") && annotation.UpdatedAt.After(selected.UpdatedAt) ||
+			annotation.UpdatedAt.Equal(selected.UpdatedAt) && annotation.Provider < selected.Provider {
+			annotationsByPane[paneKey] = annotation
+		}
+	}
+	annotations := make([]Annotation, 0, len(annotationsByPane))
+	for _, annotation := range annotationsByPane {
+		annotations = append(annotations, annotation)
+	}
+	sort.SliceStable(annotations, func(i, j int) bool { return annotations[i].Pane.PaneID < annotations[j].Pane.PaneID })
+	return annotations, problems
+}
+
+// SnapshotReadOnly resolves annotations only from record paths derived from
+// the supplied live identities. It never performs orphan cleanup, so polling
+// views cannot mutate hook state. consume, when non-nil, reserves each file's
+// bytes from the caller's generation-wide budget before it is read.
+func (s *Store) SnapshotReadOnly(ctx context.Context, live []LivePane, now time.Time, consume func(int) bool) ([]Annotation, []error) {
+	if len(live) == 0 {
+		return nil, nil
+	}
+	if _, err := os.Lstat(s.root); errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	} else if err != nil {
+		return nil, []error{err}
+	}
+	if err := verifyRootIfPresent(s.root); err != nil {
+		return nil, []error{err}
+	}
+
+	liveByKey := make(map[string]PaneIdentity, len(live)*2)
+	liveProviderByPane := make(map[string]Provider, len(live))
+	for _, item := range live {
+		if item.Pane.ServerID == "" || item.Pane.PaneID == "" {
+			continue
+		}
+		if item.Provider == "" || item.Provider == ProviderCodex {
+			liveByKey[recordKey(item.Pane, ProviderCodex)] = item.Pane
+		}
+		if item.Provider == "" || item.Provider == ProviderClaude {
+			liveByKey[recordKey(item.Pane, ProviderClaude)] = item.Pane
+		}
+		liveProviderByPane[item.Pane.ServerID+"\x00"+item.Pane.PaneID] = item.Provider
+	}
+	keys := make([]string, 0, len(liveByKey))
+	for key := range liveByKey {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	annotationsByPane := make(map[string]Annotation, len(live))
+	var problems []error
+	for _, key := range keys {
+		if err := ctx.Err(); err != nil {
+			problems = append(problems, err)
+			break
+		}
+		path := s.recordPath(key)
+		info, err := os.Lstat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			problems = append(problems, err)
+			continue
+		}
+		if info.Size() < 0 || info.Size() > int64(maxStateFile) || consume != nil && !consume(int(info.Size())) {
+			problems = append(problems, ErrSnapshotBudget)
+			break
+		}
+		current, err := readRecord(path)
+		if err != nil {
+			problems = append(problems, fmt.Errorf("read agent state %s: %w", filepath.Base(path), err))
+			continue
+		}
+		livePane := liveByKey[key]
+		if recordKey(current.Pane, current.Provider) != key || !sameLivePane(current.Pane, livePane) {
 			continue
 		}
 		annotation := resolve(current, now, s.policy)

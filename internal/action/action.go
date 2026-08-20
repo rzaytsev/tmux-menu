@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 var (
 	tmuxRun                 = tmux.Run
 	tmuxExec                = tmux.Exec
+	tmuxListPanes           = tmux.ListPanes
 	shellRunner             = runShell
 	attachTmuxSessionRunner = attachTmuxSession
 	projectBootstrapTimeout = 30 * time.Second
@@ -32,6 +34,8 @@ type Dispatch struct {
 	Mode               string     `json:"mode"`
 	Cmd                string     `json:"cmd,omitempty"`
 	PaneID             string     `json:"pane_id,omitempty"`
+	PanePID            int        `json:"pane_pid,omitempty"`
+	ProviderPID        int        `json:"provider_pid,omitempty"`
 	WindowID           string     `json:"window_id,omitempty"`
 	SessionID          string     `json:"session_id,omitempty"`
 	WindowName         string     `json:"window_name,omitempty"`
@@ -66,9 +70,11 @@ func FromCommand(c config.Command, popup config.PopupConfig, originPath string) 
 }
 
 func SwitchPane(p tmux.Pane) Dispatch {
+	panePID, _ := strconv.Atoi(p.PanePID)
 	return Dispatch{
 		Mode:      "switch-pane",
 		PaneID:    p.PaneID,
+		PanePID:   panePID,
 		WindowID:  p.WindowID,
 		SessionID: p.SessionID,
 	}
@@ -126,6 +132,9 @@ func Execute(ctx context.Context, d Dispatch, originPane string) error {
 		}
 		return nil
 	case "switch-pane":
+		if err := revalidateSwitchPane(ctx, d); err != nil {
+			return err
+		}
 		return tmuxExec(ctx,
 			"switch-client", "-t", d.SessionID,
 			";", "select-window", "-t", d.WindowID,
@@ -161,6 +170,30 @@ func Execute(ctx context.Context, d Dispatch, originPane string) error {
 	default:
 		return fmt.Errorf("unknown dispatch mode %q", d.Mode)
 	}
+}
+
+func revalidateSwitchPane(ctx context.Context, d Dispatch) error {
+	if !tmux.IsCanonicalID(d.SessionID, '$') || !tmux.IsCanonicalID(d.WindowID, '@') || !tmux.IsCanonicalID(d.PaneID, '%') || d.PanePID <= 0 || d.ProviderPID < 0 {
+		return fmt.Errorf("invalid switch-pane identity")
+	}
+	panes, err := tmuxListPanes(ctx)
+	if err != nil {
+		return fmt.Errorf("revalidate switch-pane identity: %w", err)
+	}
+	matches := 0
+	for _, pane := range panes {
+		panePID, err := strconv.Atoi(pane.PanePID)
+		if err != nil {
+			continue
+		}
+		if pane.SessionID == d.SessionID && pane.WindowID == d.WindowID && pane.PaneID == d.PaneID && panePID == d.PanePID {
+			matches++
+		}
+	}
+	if matches != 1 {
+		return fmt.Errorf("switch-pane identity is no longer live")
+	}
+	return nil
 }
 
 func popupArgs(d Dispatch) []string {

@@ -71,6 +71,20 @@ func TestSanitizeTerminalCapsInputBeforeRetainingContent(t *testing.T) {
 	}
 }
 
+func TestSanitizeTerminalBuildsMaximumPlainSpanWithBoundedAllocations(t *testing.T) {
+	raw := []byte(strings.Repeat("x", 32<<10))
+	limits := TerminalLimits{Width: 240, Height: 2, MaxInputBytes: len(raw), MaxRetainedBytes: len(raw)}
+	allocs := testing.AllocsPerRun(3, func() {
+		got := SanitizeTerminal(raw, limits)
+		if got.Plain() != strings.Repeat("x", 240) {
+			t.Fatalf("plain terminal width was not clipped: %d", len(got.Plain()))
+		}
+	})
+	if allocs > 1000 {
+		t.Fatalf("plain same-style span allocations = %.0f, want <= 1000", allocs)
+	}
+}
+
 func TestSanitizeTextMakesEveryLabelSourceOpaqueAndPassive(t *testing.T) {
 	values := map[string]string{
 		"provider": "codex\x1b]0;owned\a",

@@ -469,6 +469,23 @@ func TestWorkingLeaseDoesNotLearnIdleGapsAcrossBoundaries(t *testing.T) {
 	})
 }
 
+func TestWorkingLeaseDoesNotLearnHumanAttentionWait(t *testing.T) {
+	policy := Policy{WorkingTTL: 10 * time.Second, ChildRetention: time.Minute, LockTimeout: time.Second}
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	current, _ := reduce(record{}, coreEvent(EventTurnStart, "turn-1", now), policy)
+	current, _ = reduce(current, coreEvent(EventProgress, "turn-1", now.Add(4*time.Second)), policy)
+	attention := coreEvent(EventAttentionConfirmed, "turn-1", now.Add(5*time.Second))
+	attention.CorrelationID = "id:permission"
+	current, _ = reduce(current, attention, policy)
+	resolvedAt := now.Add(time.Hour)
+	resolved := coreEvent(EventAttentionResolved, "turn-1", resolvedAt)
+	resolved.CorrelationID = attention.CorrelationID
+	current, decision := reduce(current, resolved, policy)
+	if !decision.Applied || current.WorkingUntil.Sub(resolvedAt) != 12*time.Second {
+		t.Fatalf("attention wait inflated working lease: record=%+v decision=%+v", current, decision)
+	}
+}
+
 func TestReducePrunesExpiredChildrenAndPreservesCompletionCAS(t *testing.T) {
 	policy := Policy{WorkingTTL: time.Minute, ChildRetention: 10 * time.Minute, LockTimeout: time.Second}
 	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)

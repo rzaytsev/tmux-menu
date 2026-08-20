@@ -155,6 +155,9 @@ func reduce(previous record, event Event, policy Policy) (record, Decision) {
 		next.AttentionCorrelation = ""
 		setRecordState(&next, StateWorking, event, policy)
 	case EventAttentionCandidate, EventAttentionConfirmed:
+		// Human wait time is not provider progress cadence. Preserve the learned
+		// gap, but restart its anchor when correlated work resumes.
+		next.LastProgressAt = time.Time{}
 		setRecordState(&next, StateAttention, event, policy)
 		if event.CorrelationID != "" {
 			next.AttentionCorrelation = event.CorrelationID

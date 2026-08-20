@@ -130,6 +130,16 @@ func TestRunCommandBoundedFailsAtCapPlusOne(t *testing.T) {
 	}
 }
 
+func TestOutputBudgetConsumeIsAllOrNothing(t *testing.T) {
+	budget := NewOutputBudget(10)
+	if !budget.Consume(6) || budget.Consume(5) || budget.Used() != 6 {
+		t.Fatalf("budget consume result used=%d", budget.Used())
+	}
+	if !budget.Consume(4) || budget.Used() != 10 {
+		t.Fatalf("budget final consume used=%d", budget.Used())
+	}
+}
+
 func TestRunCommandBoundedCancelsBlockedCommand(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
 	defer cancel()
@@ -170,6 +180,25 @@ func TestCapturePaneBoundedUsesStableTargetStyledOutputAndSharedBudget(t *testin
 	}
 	if _, err := CapturePaneBounded(t.Context(), budget, "work:1.2", 25, 128); err == nil {
 		t.Fatal("non-canonical pane target was accepted")
+	}
+}
+
+func TestIsCanonicalID(t *testing.T) {
+	for _, tc := range []struct {
+		value  string
+		prefix byte
+		want   bool
+	}{
+		{value: "$0", prefix: '$', want: true},
+		{value: "@12", prefix: '@', want: true},
+		{value: "%3", prefix: '%', want: true},
+		{value: "%03", prefix: '%'},
+		{value: "%", prefix: '%'},
+		{value: "work", prefix: '$'},
+	} {
+		if got := IsCanonicalID(tc.value, tc.prefix); got != tc.want {
+			t.Fatalf("IsCanonicalID(%q, %q) = %v, want %v", tc.value, tc.prefix, got, tc.want)
+		}
 	}
 }
 

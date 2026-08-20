@@ -27,7 +27,7 @@ func TestRuntimeRefreshesSeriallyAndSchedulesOnlyAfterCompletion(t *testing.T) {
 		for _, target := range request.Targets {
 			result.Captures = append(result.Captures, TerminalUpdate{
 				Identity: target.Identity,
-				Terminal: SanitizeTerminal([]byte("live"), TerminalLimits{Width: target.Width, Height: target.Height, MaxInputBytes: 64, MaxRetainedBytes: 64}),
+				Terminal: SanitizeTerminal([]byte("live"), TerminalLimits{Width: 80, Height: 12, MaxInputBytes: 64, MaxRetainedBytes: 64}),
 			})
 		}
 		mu.Lock()

@@ -1,6 +1,8 @@
 package config
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -361,6 +363,61 @@ cmd = "echo local"
 	}
 	if len(cfg.QuickDirs) != 1 || cfg.QuickDirs[0].Title != "session docs" {
 		t.Fatalf("quick dirs = %#v", cfg.QuickDirs)
+	}
+}
+
+func TestLoadForContextBoundedChecksContextFileTypeAndBudget(t *testing.T) {
+	home := t.TempDir()
+	sessionRoot := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(sessionRoot, configFileName)
+	content := []byte("[session]\ncolor = \"orange\"\n")
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	reserved := 0
+	cfg, err := LoadForContextBounded(context.Background(), sessionRoot, sessionRoot, func(size int) bool {
+		reserved += size
+		return true
+	})
+	if err != nil || cfg.Session.Color != "orange" || reserved != len(content) {
+		t.Fatalf("bounded config color=%q reserved=%d err=%v", cfg.Session.Color, reserved, err)
+	}
+	if _, err := LoadForContextBounded(context.Background(), sessionRoot, sessionRoot, func(int) bool { return false }); !errors.Is(err, ErrConfigBudget) {
+		t.Fatalf("budget rejection = %v", err)
+	}
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := LoadForContextBounded(canceled, sessionRoot, sessionRoot, nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled config load = %v", err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadForContextBounded(context.Background(), sessionRoot, sessionRoot, nil); !errors.Is(err, ErrUnsafeConfig) {
+		t.Fatalf("non-regular config load = %v", err)
+	}
+}
+
+func TestLoadForContextBoundedAcceptsSymlinkToRegularConfig(t *testing.T) {
+	home := t.TempDir()
+	sessionRoot := t.TempDir()
+	t.Setenv("HOME", home)
+	target := filepath.Join(t.TempDir(), "session.conf")
+	if err := os.WriteFile(target, []byte("[session]\ncolor = \"orange\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(sessionRoot, configFileName)); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadForContextBounded(context.Background(), sessionRoot, sessionRoot, nil)
+	if err != nil || cfg.Session.Color != "orange" {
+		t.Fatalf("symlinked regular config color=%q err=%v", cfg.Session.Color, err)
 	}
 }
 
