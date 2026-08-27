@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"tmux-menu/internal/action"
+	"tmux-menu/internal/agentstatus"
 	"tmux-menu/internal/config"
 	"tmux-menu/internal/picker"
 	"tmux-menu/internal/shellquote"
@@ -20,6 +21,19 @@ type menuItem struct {
 	dispatch          action.Dispatch
 	alternateKey      string
 	alternateDispatch action.Dispatch
+	agentPaneID       string
+	agentAckToken     string
+}
+
+var execTmux = tmux.Exec
+var selectModeForLoop = selectModeAt
+var acknowledgeAgent = acknowledgeAgentCompletion
+var runAgentHUDSurface func(context.Context) error
+var runAgentPickerSurface func(context.Context) error
+
+func init() {
+	runAgentHUDSurface = runAgentHUD
+	runAgentPickerSurface = func(ctx context.Context) error { return runPickerLoop(ctx, "agents") }
 }
 
 func main() {
@@ -39,7 +53,7 @@ func run(ctx context.Context, args []string) error {
 	case "palette":
 		return runPickerLoop(ctx, "palette")
 	case "agents":
-		return runPickerLoop(ctx, "agents")
+		return runAgentsCommand(ctx, args[1:])
 	case "tools":
 		return runPickerLoop(ctx, "tools")
 	case "projects":
@@ -60,6 +74,8 @@ func run(ctx context.Context, args []string) error {
 		}
 		fmt.Printf("config valid: %s\n", strings.Join(paths, ", "))
 		return nil
+	case "agent-hook":
+		return runAgentHook(ctx, args[1:])
 	case "sample-config":
 		fmt.Print(config.Sample())
 		return nil
@@ -76,6 +92,7 @@ func usage() error {
 Usage:
   tmux-menu popup palette
   tmux-menu popup agents
+  tmux-menu popup agents --picker
   tmux-menu popup tools
   tmux-menu popup projects
   tmux-menu popup links
@@ -83,12 +100,18 @@ Usage:
   tmux-menu popup status
   tmux-menu palette
   tmux-menu agents
+  tmux-menu agents --picker
   tmux-menu tools
   tmux-menu projects
   tmux-menu links
   tmux-menu bookmarks
   tmux-menu status
   tmux-menu validate-config [config ...]
+  tmux-menu agent-hook ingest <codex|claude>
+  tmux-menu agent-hook trace <codex|claude>
+  tmux-menu agent-hook doctor
+  tmux-menu agent-hook snapshot
+  tmux-menu agent-hook snippets [codex|claude] [ingest|trace]
   tmux-menu sample-config
 `)
 	return nil
@@ -97,6 +120,9 @@ Usage:
 func runPopup(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		args = []string{"palette"}
+	}
+	if err := validatePopupArgs(args); err != nil {
+		return err
 	}
 	mode := args[0]
 	if !validViewMode(mode) {
@@ -123,32 +149,86 @@ func runPopup(ctx context.Context, args []string) error {
 	}
 	exe, _ = filepath.Abs(exe)
 
-	childArgs := append([]string{mode}, args[1:]...)
-	cmd := buildPopupCommand(exe, dispatchPath, rt, childArgs)
-	tmuxArgs := []string{"display-popup", "-E"}
-	if cfg.Popup.Border == "" || cfg.Popup.Border == "none" {
-		tmuxArgs = append(tmuxArgs, "-B")
-	} else {
-		tmuxArgs = append(tmuxArgs, "-b", cfg.Popup.Border)
-	}
-	if cfg.Popup.Width != "" {
-		tmuxArgs = append(tmuxArgs, "-w", cfg.Popup.Width)
-	}
-	if cfg.Popup.Height != "" {
-		tmuxArgs = append(tmuxArgs, "-h", cfg.Popup.Height)
-	}
-	tmuxArgs = append(tmuxArgs, cmd)
-	if err := tmux.Exec(ctx, tmuxArgs...); err != nil {
-		return err
-	}
-	if info, err := os.Stat(dispatchPath); err == nil && info.Size() > 0 {
+	childArgTail := append([]string(nil), args[1:]...)
+	for {
+		if err := os.Truncate(dispatchPath, 0); err != nil {
+			return err
+		}
+		childArgs := append([]string{mode}, childArgTail...)
+		cmd := buildPopupCommand(exe, dispatchPath, rt, childArgs)
+		tmuxArgs := []string{"display-popup", "-E"}
+		if cfg.Popup.Border == "" || cfg.Popup.Border == "none" {
+			tmuxArgs = append(tmuxArgs, "-B")
+		} else {
+			tmuxArgs = append(tmuxArgs, "-b", cfg.Popup.Border)
+		}
+		if width := popupWidthForMode(cfg, mode); width != "" {
+			tmuxArgs = append(tmuxArgs, "-w", width)
+		}
+		if cfg.Popup.Height != "" {
+			tmuxArgs = append(tmuxArgs, "-h", cfg.Popup.Height)
+		}
+		tmuxArgs = append(tmuxArgs, cmd)
+		if err := execTmux(ctx, tmuxArgs...); err != nil {
+			return err
+		}
+		info, err := os.Stat(dispatchPath)
+		if err != nil || info.Size() == 0 {
+			return err
+		}
 		d, err := action.Read(dispatchPath)
 		if err != nil {
 			return err
 		}
+		if d.Mode == popupViewDispatchMode {
+			if !validViewMode(d.Cmd) {
+				return fmt.Errorf("invalid popup view switch %q", d.Cmd)
+			}
+			mode = d.Cmd
+			childArgTail = nil
+			continue
+		}
 		return action.Execute(ctx, d, rt.OriginPane)
 	}
+}
+
+func runAgentsCommand(ctx context.Context, args []string) error {
+	switch {
+	case len(args) == 0:
+		return runAgentHUDSurface(ctx)
+	case len(args) == 1 && args[0] == "--picker":
+		return runAgentPickerSurface(ctx)
+	default:
+		return fmt.Errorf("usage: tmux-menu agents [--picker]")
+	}
+}
+
+func validatePopupArgs(args []string) error {
+	if len(args) == 0 {
+		return nil
+	}
+	if args[0] == "agents" {
+		if len(args) == 1 || len(args) == 2 && args[1] == "--picker" {
+			return nil
+		}
+		return fmt.Errorf("usage: tmux-menu popup agents [--picker]")
+	}
 	return nil
+}
+
+func popupWidthForMode(cfg config.Config, mode string) string {
+	if mode == "agents" {
+		return cfg.Agents.PopupWidth
+	}
+	return cfg.Popup.Width
+}
+
+func popupWidthChanges(cfg config.Config, currentMode, nextMode string) bool {
+	return popupWidthForMode(cfg, currentMode) != popupWidthForMode(cfg, nextMode)
+}
+
+func popupViewNeedsRelaunch(cfg config.Config, currentMode, nextMode string) bool {
+	return nextMode == "agents" || popupWidthChanges(cfg, currentMode, nextMode)
 }
 
 func buildPopupCommand(exe, dispatchPath string, rt runtimeContext, args []string) string {
@@ -171,6 +251,7 @@ func buildPopupCommand(exe, dispatchPath string, rt runtimeContext, args []strin
 var viewSwitchKeys = []string{"tab", "btab", "alt-1", "alt-2", "alt-3", "alt-4", "alt-5", "alt-6"}
 
 const viewSwitchHelp = "Tab:Next  Shift-Tab:Previous | Alt+ 1:Main  2:Agents  3:Tools  4:Projects  5:Status  6:Bookmarks"
+const popupViewDispatchMode = "picker-view"
 
 func viewSwitchFooter() string {
 	return viewSwitchHelp
@@ -230,24 +311,45 @@ func validViewMode(mode string) bool {
 }
 
 func runPickerLoop(ctx context.Context, mode string) error {
+	initialAgentPaneID := ""
 	for {
-		result, err := selectMode(ctx, mode)
+		result, err := selectModeForLoop(ctx, mode, initialAgentPaneID)
 		if errors.Is(err, picker.ErrCanceled) {
 			return nil
 		}
 		if err != nil {
 			return err
 		}
-		if next := viewModeForKey(result.Key); next != "" {
-			mode = next
+		if mode == "agents" && (result.Key == "ctrl-r" || result.Key == "ctrl-x") {
+			if result.Selected && result.Value.agentPaneID != "" {
+				initialAgentPaneID = result.Value.agentPaneID
+			}
+			if result.Key == "ctrl-x" && result.Selected && result.Value.agentAckToken != "" {
+				if err := acknowledgeAgent(ctx, result.Value.agentAckToken); err != nil && !errors.Is(err, agentstatus.ErrNotAcknowledgeable) {
+					return err
+				}
+			}
 			continue
 		}
-		if result.Key == "tab" || result.Key == "btab" {
+		next := viewModeForKey(result.Key)
+		if next != "" || result.Key == "tab" || result.Key == "btab" {
 			cfg, _, err := loadConfig(ctx)
 			if err != nil {
 				return err
 			}
-			mode = tabViewMode(mode, result.Key, cfg.Picker.TabOrder)
+			if next == "" {
+				next = tabViewMode(mode, result.Key, cfg.Picker.TabOrder)
+			}
+			if os.Getenv("TMUX_MENU_DISPATCH_FILE") != "" && popupViewNeedsRelaunch(cfg, mode, next) {
+				return dispatch(ctx, action.Dispatch{Mode: popupViewDispatchMode, Cmd: next})
+			}
+			if os.Getenv("TMUX_MENU_DISPATCH_FILE") == "" && next == "agents" {
+				return runAgentHUDSurface(ctx)
+			}
+			mode = next
+			if mode != "agents" {
+				initialAgentPaneID = ""
+			}
 			continue
 		}
 		if !result.Selected {
@@ -283,12 +385,12 @@ func dispatchForResult(result picker.Result[menuItem]) action.Dispatch {
 	return item.dispatch
 }
 
-func selectMode(ctx context.Context, mode string) (picker.Result[menuItem], error) {
+func selectModeAt(ctx context.Context, mode, initialAgentPaneID string) (picker.Result[menuItem], error) {
 	switch mode {
 	case "palette":
 		return selectPalette(ctx)
 	case "agents":
-		return selectAgents(ctx)
+		return selectAgentsAt(ctx, initialAgentPaneID)
 	case "tools":
 		return selectTools(ctx)
 	case "projects":

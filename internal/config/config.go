@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/BurntSushi/toml"
 )
@@ -20,6 +22,13 @@ const configFileName = ".tmux-menu.conf"
 const DefaultSessionColor = "cyan"
 const SessionColorOptions = "default, black, red, green, yellow, blue, magenta, cyan, white, bright_black, bright_red, bright_green, bright_yellow, bright_blue, bright_magenta, bright_cyan, bright_white, orange"
 const AgentColorOptions = SessionColorOptions + ", dim"
+
+const maxConfigFileBytes = 1 << 20
+
+var (
+	ErrConfigBudget = errors.New("config read budget exceeded")
+	ErrUnsafeConfig = errors.New("unsafe config file")
+)
 
 type Config struct {
 	Palette   PaletteConfig   `json:"palette" toml:"palette"`
@@ -51,8 +60,9 @@ type SessionConfig struct {
 }
 
 type AgentsConfig struct {
-	Icons  AgentIconsConfig  `json:"icons" toml:"icons"`
-	Colors AgentColorsConfig `json:"colors" toml:"colors"`
+	PopupWidth string            `json:"popup_width" toml:"popup_width"`
+	Icons      AgentIconsConfig  `json:"icons" toml:"icons"`
+	Colors     AgentColorsConfig `json:"colors" toml:"colors"`
 }
 
 type AgentIconsConfig struct {
@@ -64,6 +74,7 @@ type AgentIconsConfig struct {
 	LastBranch string `json:"last_branch" toml:"last_branch"`
 	Attention  string `json:"attention" toml:"attention"`
 	Working    string `json:"working" toml:"working"`
+	Completed  string `json:"completed" toml:"completed"`
 	Waiting    string `json:"waiting" toml:"waiting"`
 	Unknown    string `json:"unknown" toml:"unknown"`
 }
@@ -77,6 +88,7 @@ type AgentColorsConfig struct {
 	Workdir   string `json:"workdir" toml:"workdir"`
 	Attention string `json:"attention" toml:"attention"`
 	Working   string `json:"working" toml:"working"`
+	Completed string `json:"completed" toml:"completed"`
 	Waiting   string `json:"waiting" toml:"waiting"`
 	Unknown   string `json:"unknown" toml:"unknown"`
 }
@@ -200,6 +212,7 @@ func Default() Config {
 			Color: DefaultSessionColor,
 		},
 		Agents: AgentsConfig{
+			PopupWidth: "100%",
 			Icons: AgentIconsConfig{
 				Codex:      ">",
 				Claude:     "✳",
@@ -208,6 +221,7 @@ func Default() Config {
 				LastBranch: "└─",
 				Attention:  "!",
 				Working:    "●",
+				Completed:  "✓",
 				Waiting:    "○",
 				Unknown:    "?",
 			},
@@ -220,6 +234,7 @@ func Default() Config {
 				Workdir:   "dim",
 				Attention: "red",
 				Working:   "green",
+				Completed: "bright_cyan",
 				Waiting:   "yellow",
 				Unknown:   "dim",
 			},
@@ -321,6 +336,24 @@ func LoadStrict(paths ...string) (Config, error) {
 	return cfg, Validate(cfg)
 }
 
+// LoadForContextBounded applies the normal config layers while checking
+// cancellation, rejecting non-regular files, and reserving every file from a
+// caller-owned aggregate byte budget.
+func LoadForContextBounded(ctx context.Context, currentDir string, sessionRoot string, consume func(int) bool) (Config, error) {
+	cfg := Default()
+	for _, path := range configPaths(currentDir, sessionRoot) {
+		if err := loadConfigFileBounded(ctx, path, &cfg, consume); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return Config{}, err
+		}
+	}
+	normalizeConfig(&cfg)
+	applyDefaults(&cfg)
+	return cfg, Validate(cfg)
+}
+
 func configPaths(currentDir string, sessionRoot string) []string {
 	if currentDir == "" {
 		currentDir, _ = os.Getwd()
@@ -353,6 +386,57 @@ func loadConfigFile(path string, cfg *Config, strict bool) error {
 	if err != nil {
 		return err
 	}
+	return decodeConfigFile(path, b, cfg, strict)
+}
+
+func loadConfigFileBounded(ctx context.Context, path string, cfg *Config, consume func(int) bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Size() < 0 || info.Size() > maxConfigFileBytes {
+		return ErrUnsafeConfig
+	}
+	if consume != nil && !consume(int(info.Size())) {
+		return ErrConfigBudget
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	opened, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if !opened.Mode().IsRegular() || opened.Size() != info.Size() || !os.SameFile(info, opened) {
+		return ErrUnsafeConfig
+	}
+	b := make([]byte, 0, int(info.Size()))
+	buffer := make([]byte, 32<<10)
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		n, readErr := f.Read(buffer)
+		b = append(b, buffer[:n]...)
+		if len(b) > maxConfigFileBytes {
+			return ErrUnsafeConfig
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			return readErr
+		}
+	}
+	return decodeConfigFile(path, b, cfg, false)
+}
+
+func decodeConfigFile(path string, b []byte, cfg *Config, strict bool) error {
 	if filepath.Ext(path) == ".json" {
 		var next Config
 		if !strict {
@@ -416,6 +500,9 @@ func overlayDefined(dst *Config, src Config, meta toml.MetaData) {
 	if meta.IsDefined("session", "color") {
 		dst.Session.Color = src.Session.Color
 	}
+	if meta.IsDefined("agents", "popup_width") {
+		dst.Agents.PopupWidth = src.Agents.PopupWidth
+	}
 	for _, field := range []struct {
 		path  string
 		value *string
@@ -429,6 +516,7 @@ func overlayDefined(dst *Config, src Config, meta toml.MetaData) {
 		{path: "last_branch", value: &dst.Agents.Icons.LastBranch, src: src.Agents.Icons.LastBranch},
 		{path: "attention", value: &dst.Agents.Icons.Attention, src: src.Agents.Icons.Attention},
 		{path: "working", value: &dst.Agents.Icons.Working, src: src.Agents.Icons.Working},
+		{path: "completed", value: &dst.Agents.Icons.Completed, src: src.Agents.Icons.Completed},
 		{path: "waiting", value: &dst.Agents.Icons.Waiting, src: src.Agents.Icons.Waiting},
 		{path: "unknown", value: &dst.Agents.Icons.Unknown, src: src.Agents.Icons.Unknown},
 	} {
@@ -449,6 +537,7 @@ func overlayDefined(dst *Config, src Config, meta toml.MetaData) {
 		{path: "workdir", value: &dst.Agents.Colors.Workdir, src: src.Agents.Colors.Workdir},
 		{path: "attention", value: &dst.Agents.Colors.Attention, src: src.Agents.Colors.Attention},
 		{path: "working", value: &dst.Agents.Colors.Working, src: src.Agents.Colors.Working},
+		{path: "completed", value: &dst.Agents.Colors.Completed, src: src.Agents.Colors.Completed},
 		{path: "waiting", value: &dst.Agents.Colors.Waiting, src: src.Agents.Colors.Waiting},
 		{path: "unknown", value: &dst.Agents.Colors.Unknown, src: src.Agents.Colors.Unknown},
 	} {
@@ -549,6 +638,7 @@ func overlayDefined(dst *Config, src Config, meta toml.MetaData) {
 }
 
 func normalizeConfig(cfg *Config) {
+	cfg.Agents.PopupWidth = strings.TrimSpace(cfg.Agents.PopupWidth)
 	cfg.Links.Alternate.Key = strings.TrimSpace(cfg.Links.Alternate.Key)
 	for i, scheme := range cfg.Links.URLSchemes {
 		cfg.Links.URLSchemes[i] = strings.ToLower(strings.TrimSpace(scheme))
@@ -563,6 +653,7 @@ func normalizeConfig(cfg *Config) {
 		&cfg.Agents.Icons.LastBranch,
 		&cfg.Agents.Icons.Attention,
 		&cfg.Agents.Icons.Working,
+		&cfg.Agents.Icons.Completed,
 		&cfg.Agents.Icons.Waiting,
 		&cfg.Agents.Icons.Unknown,
 	} {
@@ -577,6 +668,7 @@ func normalizeConfig(cfg *Config) {
 		&cfg.Agents.Colors.Workdir,
 		&cfg.Agents.Colors.Attention,
 		&cfg.Agents.Colors.Working,
+		&cfg.Agents.Colors.Completed,
 		&cfg.Agents.Colors.Waiting,
 		&cfg.Agents.Colors.Unknown,
 	} {
@@ -619,6 +711,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.Session.Color == "" {
 		cfg.Session.Color = def.Session.Color
 	}
+	if cfg.Agents.PopupWidth == "" {
+		cfg.Agents.PopupWidth = def.Agents.PopupWidth
+	}
 	for _, field := range []struct {
 		value    *string
 		fallback string
@@ -630,6 +725,7 @@ func applyDefaults(cfg *Config) {
 		{value: &cfg.Agents.Icons.LastBranch, fallback: def.Agents.Icons.LastBranch},
 		{value: &cfg.Agents.Icons.Attention, fallback: def.Agents.Icons.Attention},
 		{value: &cfg.Agents.Icons.Working, fallback: def.Agents.Icons.Working},
+		{value: &cfg.Agents.Icons.Completed, fallback: def.Agents.Icons.Completed},
 		{value: &cfg.Agents.Icons.Waiting, fallback: def.Agents.Icons.Waiting},
 		{value: &cfg.Agents.Icons.Unknown, fallback: def.Agents.Icons.Unknown},
 		{value: &cfg.Agents.Colors.Codex, fallback: def.Agents.Colors.Codex},
@@ -640,6 +736,7 @@ func applyDefaults(cfg *Config) {
 		{value: &cfg.Agents.Colors.Workdir, fallback: def.Agents.Colors.Workdir},
 		{value: &cfg.Agents.Colors.Attention, fallback: def.Agents.Colors.Attention},
 		{value: &cfg.Agents.Colors.Working, fallback: def.Agents.Colors.Working},
+		{value: &cfg.Agents.Colors.Completed, fallback: def.Agents.Colors.Completed},
 		{value: &cfg.Agents.Colors.Waiting, fallback: def.Agents.Colors.Waiting},
 		{value: &cfg.Agents.Colors.Unknown, fallback: def.Agents.Colors.Unknown},
 	} {
@@ -766,6 +863,7 @@ func Validate(cfg Config) error {
 		{name: "last_branch", value: cfg.Agents.Icons.LastBranch},
 		{name: "attention", value: cfg.Agents.Icons.Attention},
 		{name: "working", value: cfg.Agents.Icons.Working},
+		{name: "completed", value: cfg.Agents.Icons.Completed},
 		{name: "waiting", value: cfg.Agents.Icons.Waiting},
 		{name: "unknown", value: cfg.Agents.Icons.Unknown},
 	} {
@@ -788,6 +886,7 @@ func Validate(cfg Config) error {
 		{name: "workdir", value: cfg.Agents.Colors.Workdir},
 		{name: "attention", value: cfg.Agents.Colors.Attention},
 		{name: "working", value: cfg.Agents.Colors.Working},
+		{name: "completed", value: cfg.Agents.Colors.Completed},
 		{name: "waiting", value: cfg.Agents.Colors.Waiting},
 		{name: "unknown", value: cfg.Agents.Colors.Unknown},
 	} {
@@ -880,8 +979,16 @@ func validateAgentIcon(name string, value string, allowEmpty bool) error {
 		}
 		return fmt.Errorf("%s is required", name)
 	}
-	if strings.ContainsAny(value, "\t\r\n") {
-		return fmt.Errorf("%s cannot contain tabs or newlines", name)
+	if !utf8.ValidString(value) {
+		return fmt.Errorf("%s must be valid UTF-8", name)
+	}
+	for _, char := range value {
+		if char < 0x20 || (char >= 0x7f && char <= 0x9f) ||
+			char == 0x061c || char == 0x200e || char == 0x200f ||
+			(char >= 0x202a && char <= 0x202e) ||
+			(char >= 0x2066 && char <= 0x2069) {
+			return fmt.Errorf("%s cannot contain terminal or bidi controls", name)
+		}
 	}
 	return nil
 }
@@ -992,6 +1099,10 @@ tab_order = ["palette", "agents", "tools", "projects", "status", "bookmarks"]
 # bright_magenta, bright_cyan, bright_white.
 color = "cyan"
 
+[agents]
+# Dedicated agents popup width; other views use popup.width.
+popup_width = "100%%"
+
 [agents.icons]
 # Empty other uses the detected product name.
 codex = ">"
@@ -1002,6 +1113,7 @@ branch = "├─"
 last_branch = "└─"
 attention = "!"
 working = "●"
+completed = "✓"
 waiting = "○"
 unknown = "?"
 
@@ -1015,6 +1127,7 @@ thread = "default"
 workdir = "dim"
 attention = "red"
 working = "green"
+completed = "bright_cyan"
 waiting = "yellow"
 unknown = "dim"
 

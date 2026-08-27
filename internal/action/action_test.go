@@ -2,6 +2,7 @@ package action
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,7 +12,91 @@ import (
 	"time"
 
 	"tmux-menu/internal/config"
+	"tmux-menu/internal/tmux"
 )
+
+func TestExecuteSwitchPaneRevalidatesExactLiveIdentity(t *testing.T) {
+	restoreList := stubActionPaneList(t, []tmux.Pane{{
+		SessionID: "$1", WindowID: "@2", PaneID: "%3", PanePID: "404",
+	}})
+	defer restoreList()
+	var calls [][]string
+	restoreTmux := stubActionTmux(t, func(_ context.Context, args ...string) (string, error) {
+		calls = append(calls, append([]string(nil), args...))
+		return "", nil
+	})
+	defer restoreTmux()
+
+	err := Execute(context.Background(), Dispatch{
+		Mode: "switch-pane", SessionID: "$1", WindowID: "@2", PaneID: "%3", PanePID: 404,
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{{"switch-client", "-t", "$1", ";", "select-window", "-t", "@2", ";", "select-pane", "-t", "%3"}}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("tmux calls = %#v, want %#v", calls, want)
+	}
+}
+
+func TestExecuteSwitchPaneFailsClosedForMalformedMovedAndVanishedTargets(t *testing.T) {
+	tests := []struct {
+		name  string
+		value Dispatch
+		live  []tmux.Pane
+	}{
+		{
+			name:  "malformed",
+			value: Dispatch{Mode: "switch-pane", SessionID: "work", WindowID: "@2", PaneID: "%3", PanePID: 404},
+		},
+		{
+			name:  "moved",
+			value: Dispatch{Mode: "switch-pane", SessionID: "$1", WindowID: "@2", PaneID: "%3", PanePID: 404},
+			live:  []tmux.Pane{{SessionID: "$1", WindowID: "@9", PaneID: "%3", PanePID: "404"}},
+		},
+		{
+			name:  "reused pane id",
+			value: Dispatch{Mode: "switch-pane", SessionID: "$1", WindowID: "@2", PaneID: "%3", PanePID: 404},
+			live:  []tmux.Pane{{SessionID: "$1", WindowID: "@2", PaneID: "%3", PanePID: "999"}},
+		},
+		{
+			name:  "vanished",
+			value: Dispatch{Mode: "switch-pane", SessionID: "$1", WindowID: "@2", PaneID: "%3", PanePID: 404},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			restoreList := stubActionPaneList(t, tc.live)
+			defer restoreList()
+			restoreTmux := stubActionTmux(t, func(_ context.Context, args ...string) (string, error) {
+				t.Fatalf("failed validation must not mutate tmux: %#v", args)
+				return "", nil
+			})
+			defer restoreTmux()
+			if err := Execute(context.Background(), tc.value, ""); err == nil {
+				t.Fatal("expected fail-closed identity error")
+			}
+		})
+	}
+}
+
+func TestExecuteSwitchPaneFailsClosedWhenLiveInventoryIsUnavailable(t *testing.T) {
+	oldList := tmuxListPanes
+	tmuxListPanes = func(context.Context) ([]tmux.Pane, error) {
+		return nil, errors.New("tmux unavailable")
+	}
+	defer func() { tmuxListPanes = oldList }()
+	restoreTmux := stubActionTmux(t, func(_ context.Context, args ...string) (string, error) {
+		t.Fatalf("inventory error must not mutate tmux: %#v", args)
+		return "", nil
+	})
+	defer restoreTmux()
+	if err := Execute(context.Background(), Dispatch{
+		Mode: "switch-pane", SessionID: "$1", WindowID: "@2", PaneID: "%3", PanePID: 404,
+	}, ""); err == nil || !strings.Contains(err.Error(), "tmux unavailable") {
+		t.Fatalf("error = %v", err)
+	}
+}
 
 func TestPopupArgsUseWorkingDir(t *testing.T) {
 	d := Dispatch{
@@ -247,6 +332,15 @@ func stubActionTmux(t *testing.T, fn func(context.Context, ...string) (string, e
 		newPasteBufferName = oldPasteBufferName
 		projectBootstrapTimeout = oldBootstrapTimeout
 	}
+}
+
+func stubActionPaneList(t *testing.T, panes []tmux.Pane) func() {
+	t.Helper()
+	old := tmuxListPanes
+	tmuxListPanes = func(context.Context) ([]tmux.Pane, error) {
+		return append([]tmux.Pane(nil), panes...), nil
+	}
+	return func() { tmuxListPanes = old }
 }
 
 func hasCall(calls [][]string, want []string) bool {

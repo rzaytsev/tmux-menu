@@ -2,20 +2,19 @@
 
 Small Go command palette for tmux.
 
-`tmux-menu` opens tmux pickers through `fzf` so you can jump between sessions,
-panes, agent panes, project directories, links, bookmarks, tools, and task
-files without leaving the keyboard.
+`tmux-menu` opens a live agent HUD plus tmux pickers so you can monitor coding
+agents and jump between sessions, panes, project directories, links, bookmarks,
+tools, and task files without leaving the keyboard.
 Status can also act as a cross-project radar: configured session reporters
 produce urgency-sorted rows with a fixed right-side block preview.
 Manually named tmux windows are shown alongside each pane's own title.
-The agents picker groups panes under display-only session headers and previews
-the selected pane's latest scrollback lines, with popup and preview sizing
-controlled by the shared config. Selectable tree rows show a compact status
-sign, a blue Codex `>` or orange Claude `✳` mark, thread name, and compact
-workdir with the common `~/projects/` prefix omitted. Agent marks, tree/status
-icons, and their colors are configurable through `[agents.icons]` and
-`[agents.colors]`.
-Each session-root `.tmux-menu.conf` can set its header `[session].color`.
+The Agents view is an adaptive live grid: it refreshes visible terminal tails,
+keeps stable pane positions, pages beyond four agents, highlights attention,
+and expands one selected pane for focused reading. Press `/` for the existing
+fzf switcher, or run `agents --picker` directly. Every switch revalidates the
+exact tmux session, window, pane, and pane-process identity before dispatch.
+Agent marks, status icons, and colors remain configurable through
+`[agents.icons]`, `[agents.colors]`, and per-session `[session].color`.
 Tab and Shift-Tab cycle through a configurable picker order, while a persistent
 footer shows those controls and the direct Alt-number shortcuts.
 The links picker recognizes configurable URL schemes, including HTTP(S), Slack,
@@ -44,12 +43,20 @@ The binary is built at `bin/tmux-menu` and installed to
 ```sh
 tmux-menu popup palette
 tmux-menu popup agents
+tmux-menu popup agents --picker
 tmux-menu popup tools
 tmux-menu popup projects
 tmux-menu popup links
 tmux-menu popup bookmarks
 tmux-menu popup status
 tmux-menu validate-config ~/.tmux-menu.conf
+```
+
+Run the HUD or direct picker without creating a popup:
+
+```sh
+tmux-menu agents
+tmux-menu agents --picker
 ```
 
 Suggested tmux binding:

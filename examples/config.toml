@@ -17,6 +17,10 @@ tab_order = ["palette", "agents", "tools", "projects", "status", "bookmarks"]
 # bright_magenta, bright_cyan, bright_white.
 color = "cyan"
 
+[agents]
+# Dedicated Agent HUD / direct picker popup width. V1 adds no other HUD knobs.
+popup_width = "100%"
+
 [agents.icons]
 # Empty other uses the detected product name.
 codex = ">"
@@ -27,6 +31,7 @@ branch = "├─"
 last_branch = "└─"
 attention = "!"
 working = "●"
+completed = "✓"
 waiting = "○"
 unknown = "?"
 
@@ -40,6 +45,7 @@ thread = "default"
 workdir = "dim"
 attention = "red"
 working = "green"
+completed = "bright_cyan"
 waiting = "yellow"
 unknown = "dim"
 

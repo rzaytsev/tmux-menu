@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"time"
 
 	"tmux-menu/internal/action"
 	"tmux-menu/internal/picker"
@@ -22,13 +23,11 @@ func selectPalette(ctx context.Context) (picker.Result[menuItem], error) {
 		if section != "agents" {
 			continue
 		}
-		snapshot := loadAgentProcessSnapshot(panes)
-		agents := agentPanesWithProcessSnapshot(panes, snapshot)
-		sessionColors, err := loadAgentSessionColors(agents, cfg.Session.Color)
+		inventory, err := agentInventoryForPanes(ctx, panes, cfg.Session.Color, time.Now())
 		if err != nil {
 			return picker.Result[menuItem]{}, err
 		}
-		agentRows = agentItemsWithProcessSnapshotAndSessionColorsAndConfig(panes, rt.OriginPane, snapshot, sessionColors, cfg.Agents)
+		agentRows = agentItemsForRows(agentRowsForPicker(inventory.rows), rt.OriginPane, inventory.sessionColors, cfg.Agents, false)
 		break
 	}
 	items := paletteItemsWithAgentSource(panes, rt.SessionID, rt.OriginPane, cfg.Palette.Sections, func() []picker.Item[menuItem] {
