@@ -23,7 +23,7 @@ Work directly and keep changes small. This is a local tmux utility, not a framew
   `agents --picker` opens that picker directly.
 - `tools`: configured commands, dynamic Makefile targets from the session root/current dir, and quick dirs.
 - `projects`: lists one-level directories under `projects.roots`, creates/switches tmux sessions natively, and shows whether the configured bootstrap file exists.
-- `links`: captures origin pane scrollback, extracts URL schemes configured by `links.url_schemes` (default HTTP, HTTPS, Slack, and Telegram), copies selected targets, opens file refs through configured `links.open`, opens URLs with `open`, and supports a configured alternate opener.
+- `links`: captures origin pane scrollback, extracts URL schemes configured by `links.url_schemes` (default HTTP, HTTPS, Slack, and Telegram) plus Jira issue keys when the session-local `links.jira_base_url` is set, copies selected targets, opens file refs through configured `links.open`, opens URLs with `open`, and supports a configured alternate opener.
 - `bookmarks`: scans inline Markdown links from `bookmarks.dirs` in configured order, default `["~/notes/projects/{project}", "~/projects/{project}"]`, skips path parts matching `bookmarks.ignore_patterns` defaulting to `.git`, `.tmp`, and `vendor`, opens HTTP(S) links with `open`, and opens local file links in a right-side editor pane.
 - `status`: when `status.targets` is configured, concurrently runs one JSON reporter per named active tmux session and shows urgency-sorted project rows with a visible block preview; otherwise it runs optional project-local `status.command` or shows the directory task board from `status.status_dir` and `status.statuses`.
 - Picker views support Tab/Shift-Tab through configured `picker.tab_order` and `Alt-1` main, `Alt-2` agents, `Alt-3` tools, `Alt-4` projects, `Alt-5` status, `Alt-6` bookmarks through `fzf --expect`; navigation shortcuts are shown in a persistent footer except in the HUD, while `picker.show_help` controls optional view-specific help.
@@ -91,6 +91,7 @@ Work directly and keep changes small. This is a local tmux utility, not a framew
 - Status labels are only `<status> | <title> | <summary>`; do not include a redundant `status` kind prefix or visible file path.
 - Status selections open the file through `editor.command` using configured `status.open`.
 - Link file selections use `editor` config for command and size plus configured `links.open`; default is `$EDITOR` in an 80% x 80% rounded popup.
+- Jira issue keys are uppercase `<PROJECT>-<NUMBER>` tokens; when `links.jira_base_url` is configured, rows use the `jira` kind, targets are canonical `<base>/browse/<key>` URLs, and captured full Jira URLs deduplicate with issue-key mentions.
 - Bookmark local-file selections use `editor.command` and configured `bookmarks.open`; resolve relative links from the source Markdown file and strip local `#fragment`/`?query`.
 - Bookmark row kind labels use the configured source directory name, not the literal word `bookmark`.
 - Do not show local hostname prefixes in pane titles.

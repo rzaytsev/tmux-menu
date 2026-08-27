@@ -207,6 +207,12 @@ const (
 )
 
 func colorKind(kind string) string {
+	switch kind {
+	case "url":
+		return ansiYellow + kind + ansiReset
+	case "jira":
+		return ansiMagenta + kind + ansiReset
+	}
 	return ansiBlue + kind + ansiReset
 }
 

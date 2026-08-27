@@ -18,7 +18,8 @@ Agent marks, status icons, and colors remain configurable through
 Tab and Shift-Tab cycle through a configurable picker order, while a persistent
 footer shows those controls and the direct Alt-number shortcuts.
 The links picker recognizes configurable URL schemes, including HTTP(S), Slack,
-and Telegram deep links by default.
+and Telegram deep links by default. A session-local Jira base URL can also turn
+issue keys such as `INF-234` into canonical `jira` browser-link rows.
 
 ## Requirements
 

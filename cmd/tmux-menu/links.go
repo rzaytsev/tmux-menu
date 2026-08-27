@@ -25,7 +25,7 @@ func selectLinks(ctx context.Context) (picker.Result[menuItem], error) {
 	if err != nil {
 		return picker.Result[menuItem]{}, err
 	}
-	found := linkscan.Extract(scrollback, rt.OriginPath, cfg.Links.URLSchemes)
+	found := linkscan.Extract(scrollback, rt.OriginPath, cfg.Links.URLSchemes, cfg.Links.JiraBaseURL)
 	items := make([]picker.Item[menuItem], 0, len(found))
 	for _, item := range found {
 		items = append(items, picker.Item[menuItem]{
@@ -78,6 +78,8 @@ func linkLabel(item linkscan.Item) string {
 	switch item.Kind {
 	case linkscan.KindURL:
 		return fmt.Sprintf("%s      %s  %s", colorKind("url"), item.Target, dim(truncate(item.SourceLine, 90)))
+	case linkscan.KindJira:
+		return fmt.Sprintf("%s     %s  %s", colorKind("jira"), item.Target, dim(truncate(item.SourceLine, 90)))
 	case linkscan.KindFile:
 		target := shortenHome(item.Target)
 		if item.Line > 0 {
@@ -95,7 +97,7 @@ func linkLabel(item linkscan.Item) string {
 func linkDispatch(item linkscan.Item, workingDir string, editor config.EditorConfig, openConfig config.OpenConfig) action.Dispatch {
 	var open action.Dispatch
 	switch item.Kind {
-	case linkscan.KindURL:
+	case linkscan.KindURL, linkscan.KindJira:
 		open = action.Dispatch{
 			Mode: "shell",
 			Cmd:  "open " + shellquote.Quote(item.Target),
@@ -138,7 +140,7 @@ func fileOpenDispatch(item linkscan.Item, workingDir string, editor config.Edito
 func linkAlternateDispatch(item linkscan.Item, alt config.LinkAlternateConfig) action.Dispatch {
 	var command string
 	switch item.Kind {
-	case linkscan.KindURL:
+	case linkscan.KindURL, linkscan.KindJira:
 		command = alt.URLCommand
 	case linkscan.KindFile:
 		command = alt.FileCommand

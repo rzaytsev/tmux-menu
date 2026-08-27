@@ -14,6 +14,7 @@ type Kind string
 const (
 	KindFile Kind = "file"
 	KindURL  Kind = "url"
+	KindJira Kind = "jira"
 )
 
 type Item struct {
@@ -34,12 +35,14 @@ var (
 			`(?::\d+(?:-\d+)?)?(?::\d+)?` +
 			`)(?:$|[\s"')>\],;:.])`,
 	)
+	jiraIssueRE = regexp.MustCompile(`[A-Z][A-Z0-9_]*-[0-9]+`)
 )
 
-func Extract(scrollback string, baseDir string, urlSchemes []string) []Item {
+func Extract(scrollback string, baseDir string, urlSchemes []string, jiraBaseURL string) []Item {
 	seen := make(map[string]bool)
 	items := make([]Item, 0)
 	urlRefRE := urlRefRegexp(urlSchemes)
+	jiraBaseURL = strings.TrimRight(strings.TrimSpace(jiraBaseURL), "/")
 	for _, line := range strings.Split(scrollback, "\n") {
 		if urlRefRE != nil {
 			for _, match := range urlRefRE.FindAllStringSubmatch(line, -1) {
@@ -47,12 +50,30 @@ func Extract(scrollback string, baseDir string, urlSchemes []string) []Item {
 				if !validURL(target, urlSchemes) {
 					continue
 				}
-				key := string(KindURL) + "\x00" + target
+				kind := KindURL
+				raw := target
+				if issue, ok := jiraIssueFromURL(target, jiraBaseURL); ok {
+					kind = KindJira
+					raw = issue
+					target = jiraBaseURL + "/browse/" + issue
+				}
+				key := string(kind) + "\x00" + target
 				if seen[key] {
 					continue
 				}
 				seen[key] = true
-				items = append(items, Item{Kind: KindURL, Raw: target, Target: target, SourceLine: strings.TrimSpace(line)})
+				items = append(items, Item{Kind: kind, Raw: raw, Target: target, SourceLine: strings.TrimSpace(line)})
+			}
+		}
+		if jiraBaseURL != "" {
+			for _, issue := range jiraIssues(line) {
+				target := jiraBaseURL + "/browse/" + issue
+				key := string(KindJira) + "\x00" + target
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				items = append(items, Item{Kind: KindJira, Raw: issue, Target: target, SourceLine: strings.TrimSpace(line)})
 			}
 		}
 
@@ -88,8 +109,39 @@ func Extract(scrollback string, baseDir string, urlSchemes []string) []Item {
 	return items
 }
 
+func jiraIssueFromURL(target string, jiraBaseURL string) (string, bool) {
+	prefix := jiraBaseURL + "/browse/"
+	if jiraBaseURL == "" || !strings.HasPrefix(target, prefix) {
+		return "", false
+	}
+	rest := strings.TrimPrefix(target, prefix)
+	match := jiraIssueRE.FindStringIndex(rest)
+	if match == nil || match[0] != 0 || match[1] < len(rest) && isIssueWordByte(rest[match[1]]) {
+		return "", false
+	}
+	return rest[:match[1]], true
+}
+
+func jiraIssues(line string) []string {
+	issues := make([]string, 0)
+	for _, match := range jiraIssueRE.FindAllStringIndex(line, -1) {
+		if match[0] > 0 && isIssueWordByte(line[match[0]-1]) {
+			continue
+		}
+		if match[1] < len(line) && isIssueWordByte(line[match[1]]) {
+			continue
+		}
+		issues = append(issues, line[match[0]:match[1]])
+	}
+	return issues
+}
+
+func isIssueWordByte(b byte) bool {
+	return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' || b == '_'
+}
+
 func trimURL(s string) string {
-	return strings.TrimRight(s, ".,;)]}")
+	return strings.TrimRight(s, ".,;)]}`")
 }
 
 func urlRefRegexp(schemes []string) *regexp.Regexp {

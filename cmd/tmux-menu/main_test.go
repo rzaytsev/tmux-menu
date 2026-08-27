@@ -1383,6 +1383,52 @@ func TestLinkDispatchOpensURLWithDefaultBrowser(t *testing.T) {
 	}
 }
 
+func TestLinkLabelColorsURLKindYellow(t *testing.T) {
+	label := linkLabel(linkscan.Item{
+		Kind:   linkscan.KindURL,
+		Target: "https://example.com",
+	})
+	wantPrefix := ansiYellow + "url" + ansiReset
+	if !strings.HasPrefix(label, wantPrefix) {
+		t.Fatalf("label = %q, want yellow URL kind prefix %q", label, wantPrefix)
+	}
+}
+
+func TestLinkLabelAndDispatchTreatJiraAsBrowserLink(t *testing.T) {
+	item := linkscan.Item{
+		Kind:       linkscan.KindJira,
+		Raw:        "INF-234",
+		Target:     "https://dentiai.atlassian.net/browse/INF-234",
+		SourceLine: "work on INF-234",
+	}
+	wantPrefix := ansiMagenta + "jira" + ansiReset
+	if label := linkLabel(item); !strings.HasPrefix(label, wantPrefix) {
+		t.Fatalf("label = %q, want magenta Jira kind prefix %q", label, wantPrefix)
+	}
+	if label := stripANSI(linkLabel(item)); !strings.HasPrefix(label, "jira ") {
+		t.Fatalf("label = %q, want jira kind", label)
+	}
+
+	d := linkDispatch(item, "/tmp/project", config.Default().Editor, config.Default().Links.Open)
+	if d.Mode != "sequence" || len(d.Steps) != 2 {
+		t.Fatalf("dispatch = %#v, want copy and browser open", d)
+	}
+	if d.Steps[1].Mode != "shell" || d.Steps[1].Cmd != "open 'https://dentiai.atlassian.net/browse/INF-234'" {
+		t.Fatalf("open step = %#v", d.Steps[1])
+	}
+}
+
+func TestLinkAlternateDispatchTreatsJiraAsURL(t *testing.T) {
+	d := linkAlternateDispatch(linkscan.Item{
+		Kind:   linkscan.KindJira,
+		Target: "https://dentiai.atlassian.net/browse/INF-234",
+	}, config.LinkAlternateConfig{URLCommand: "open -a Firefox"})
+	if d.Mode != "sequence" || len(d.Steps) != 2 ||
+		d.Steps[1].Cmd != "open -a Firefox 'https://dentiai.atlassian.net/browse/INF-234'" {
+		t.Fatalf("dispatch = %#v, want alternate URL open", d)
+	}
+}
+
 func TestLinkAlternateDispatchOpensURLWithConfiguredApp(t *testing.T) {
 	alt := config.LinkAlternateConfig{
 		Key:         "alt-enter",

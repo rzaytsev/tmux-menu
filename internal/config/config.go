@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -110,9 +111,10 @@ type EditorConfig struct {
 }
 
 type LinksConfig struct {
-	URLSchemes []string            `json:"url_schemes" toml:"url_schemes"`
-	Alternate  LinkAlternateConfig `json:"alternate" toml:"alternate"`
-	Open       OpenConfig          `json:"open" toml:"open"`
+	URLSchemes  []string            `json:"url_schemes" toml:"url_schemes"`
+	JiraBaseURL string              `json:"jira_base_url" toml:"jira_base_url"`
+	Alternate   LinkAlternateConfig `json:"alternate" toml:"alternate"`
+	Open        OpenConfig          `json:"open" toml:"open"`
 }
 
 type LinkAlternateConfig struct {
@@ -575,6 +577,9 @@ func overlayDefined(dst *Config, src Config, meta toml.MetaData) {
 	if meta.IsDefined("links", "url_schemes") {
 		dst.Links.URLSchemes = src.Links.URLSchemes
 	}
+	if meta.IsDefined("links", "jira_base_url") {
+		dst.Links.JiraBaseURL = src.Links.JiraBaseURL
+	}
 	if meta.IsDefined("links", "alternate", "key") {
 		dst.Links.Alternate.Key = src.Links.Alternate.Key
 	}
@@ -640,6 +645,7 @@ func overlayDefined(dst *Config, src Config, meta toml.MetaData) {
 func normalizeConfig(cfg *Config) {
 	cfg.Agents.PopupWidth = strings.TrimSpace(cfg.Agents.PopupWidth)
 	cfg.Links.Alternate.Key = strings.TrimSpace(cfg.Links.Alternate.Key)
+	cfg.Links.JiraBaseURL = strings.TrimRight(strings.TrimSpace(cfg.Links.JiraBaseURL), "/")
 	for i, scheme := range cfg.Links.URLSchemes {
 		cfg.Links.URLSchemes[i] = strings.ToLower(strings.TrimSpace(scheme))
 	}
@@ -908,6 +914,14 @@ func Validate(cfg Config) error {
 			return fmt.Errorf("links.url_schemes[%d] duplicates %q", i, scheme)
 		}
 		seenURLSchemes[scheme] = true
+	}
+	if cfg.Links.JiraBaseURL != "" {
+		jiraURL, err := url.Parse(cfg.Links.JiraBaseURL)
+		if err != nil || jiraURL.Host == "" || jiraURL.User != nil ||
+			(jiraURL.Scheme != "http" && jiraURL.Scheme != "https") ||
+			jiraURL.RawQuery != "" || jiraURL.ForceQuery || jiraURL.Fragment != "" {
+			return fmt.Errorf("links.jira_base_url must be an absolute http(s) URL without credentials, query, or fragment")
+		}
 	}
 	if err := validateLinkAlternateKey(cfg.Links.Alternate.Key); err != nil {
 		return err
@@ -1196,6 +1210,8 @@ border = "rounded"
 [links]
 # URL schemes extracted from pane scrollback. Local config replaces this list.
 url_schemes = ["http", "https", "slack", "tg"]
+# Optional Jira root for issue keys such as INF-234. Prefer a local config.
+jira_base_url = ""
 
 [links.alternate]
 # Secondary opener used by Alt-Enter in the links view.

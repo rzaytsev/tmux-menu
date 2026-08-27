@@ -18,7 +18,7 @@ panic at cmd/main.go:12:3:
 open ./README.md:5 for notes
 ignore missing.go:9`
 
-	items := Extract(scrollback, dir, defaultURLSchemes)
+	items := Extract(scrollback, dir, defaultURLSchemes, "")
 	if len(items) != 3 {
 		t.Fatalf("expected 3 items, got %#v", items)
 	}
@@ -45,7 +45,7 @@ Telegram TG://resolve?domain=example)
 email mailto:user@example.com
 ignored ftp://example.com`
 
-	items := Extract(scrollback, "", []string{"slack", "tg", "mailto"})
+	items := Extract(scrollback, "", []string{"slack", "tg", "mailto"}, "")
 	if len(items) != 3 {
 		t.Fatalf("expected 3 configured URLs, got %#v", items)
 	}
@@ -61,7 +61,7 @@ ignored ftp://example.com`
 }
 
 func TestExtractDoesNotMatchSchemeInsideAnotherScheme(t *testing.T) {
-	items := Extract("fooslack://channel?team=T123&id=C456", "", []string{"slack"})
+	items := Extract("fooslack://channel?team=T123&id=C456", "", []string{"slack"}, "")
 	if len(items) != 0 {
 		t.Fatalf("expected no partial scheme match, got %#v", items)
 	}
@@ -71,7 +71,7 @@ func TestExtractDeduplicatesFileRefs(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "main.go"))
 
-	items := Extract("main.go:1\nmain.go:1\nmain.go:2", dir, defaultURLSchemes)
+	items := Extract("main.go:1\nmain.go:1\nmain.go:2", dir, defaultURLSchemes, "")
 	if len(items) != 2 {
 		t.Fatalf("expected 2 unique file refs, got %#v", items)
 	}
@@ -81,7 +81,7 @@ func TestExtractFileRangeUsesStartLine(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "internal", "config", "config.go"))
 
-	items := Extract("see internal/config/config.go:33-55", dir, defaultURLSchemes)
+	items := Extract("see internal/config/config.go:33-55", dir, defaultURLSchemes, "")
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item, got %#v", items)
 	}
@@ -97,7 +97,7 @@ func TestExtractFileLineBeforeTrailingDash(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "internal", "config", "config.go"))
 
-	items := Extract("see internal/config/config.go:13 - config", dir, defaultURLSchemes)
+	items := Extract("see internal/config/config.go:13 - config", dir, defaultURLSchemes, "")
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item, got %#v", items)
 	}
@@ -110,7 +110,7 @@ func TestExtractFileRefBeforeTrailingPeriod(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "docs", "livekit-room-chat-plan.md"))
 
-	items := Extract("Saved the plan to docs/livekit-room-chat-plan.md. I also linked it.", dir, defaultURLSchemes)
+	items := Extract("Saved the plan to docs/livekit-room-chat-plan.md. I also linked it.", dir, defaultURLSchemes, "")
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item, got %#v", items)
 	}
@@ -123,12 +123,58 @@ func TestExtractFileLineBeforeTrailingPeriod(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "README.md"))
 
-	items := Extract("linked from root README.md:20.", dir, defaultURLSchemes)
+	items := Extract("linked from root README.md:20.", dir, defaultURLSchemes, "")
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item, got %#v", items)
 	}
 	if items[0].Line != 20 {
 		t.Fatalf("line = %d, want 20", items[0].Line)
+	}
+}
+
+func TestExtractJiraIssueKeysAsURLs(t *testing.T) {
+	scrollback := `work on INF-220 and VAPC-1234.
+repeat INF-220
+ignore lowercase inf-221 and embedded prefixINF-222`
+
+	items := Extract(scrollback, "", defaultURLSchemes, "https://dentiai.atlassian.net")
+	if len(items) != 2 {
+		t.Fatalf("expected 2 Jira URLs, got %#v", items)
+	}
+	for i, want := range []struct {
+		raw    string
+		target string
+	}{
+		{raw: "INF-220", target: "https://dentiai.atlassian.net/browse/INF-220"},
+		{raw: "VAPC-1234", target: "https://dentiai.atlassian.net/browse/VAPC-1234"},
+	} {
+		if items[i].Kind != KindJira || items[i].Raw != want.raw || items[i].Target != want.target {
+			t.Fatalf("item %d = %#v, want Jira URL %#v", i, items[i], want)
+		}
+	}
+}
+
+func TestExtractCanonicalizesJiraURLWithEncodedBacktick(t *testing.T) {
+	items := Extract(
+		"https://dentiai.atlassian.net/browse/INF-234%60",
+		"",
+		defaultURLSchemes,
+		"https://dentiai.atlassian.net",
+	)
+	if len(items) != 1 {
+		t.Fatalf("expected one canonical Jira URL, got %#v", items)
+	}
+	if items[0].Kind != KindJira ||
+		items[0].Raw != "INF-234" ||
+		items[0].Target != "https://dentiai.atlassian.net/browse/INF-234" {
+		t.Fatalf("unexpected Jira item: %#v", items[0])
+	}
+}
+
+func TestExtractIgnoresJiraIssueKeysWithoutBaseURL(t *testing.T) {
+	items := Extract("work on INF-220", "", defaultURLSchemes, "")
+	if len(items) != 0 {
+		t.Fatalf("expected no Jira URLs without a configured base URL, got %#v", items)
 	}
 }
 

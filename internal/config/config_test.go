@@ -156,6 +156,7 @@ border = "rounded"
 
 [links]
 url_schemes = ["https", "slack", "mailto"]
+jira_base_url = " https://dentiai.atlassian.net/ "
 
 [links.alternate]
 key = "ctrl-o"
@@ -247,6 +248,9 @@ session = "work"
 	}
 	if got := strings.Join(cfg.Links.URLSchemes, ","); got != "https,slack,mailto" {
 		t.Fatalf("links URL schemes = %q", got)
+	}
+	if cfg.Links.JiraBaseURL != "https://dentiai.atlassian.net" {
+		t.Fatalf("links Jira base URL = %q", cfg.Links.JiraBaseURL)
 	}
 	if cfg.Links.Open.Mode != "window" || cfg.Links.Open.PaneSide != "left" {
 		t.Fatalf("unexpected links open config: %#v", cfg.Links.Open)
@@ -344,6 +348,7 @@ color = "cyan"
 
 [links]
 url_schemes = ["http", "https"]
+jira_base_url = "https://global.atlassian.net"
 
 [status]
 status_dir = ["./todo"]
@@ -370,6 +375,7 @@ color = "yellow"
 
 [links]
 url_schemes = ["slack", "tg"]
+jira_base_url = "https://dentiai.atlassian.net"
 
 [status]
 status_dir = ["./session-todo", "./docs"]
@@ -415,6 +421,9 @@ cmd = "echo local"
 	}
 	if got := strings.Join(cfg.Links.URLSchemes, ","); got != "slack,tg" {
 		t.Fatalf("links URL schemes should be replaced by session config: %q", got)
+	}
+	if cfg.Links.JiraBaseURL != "https://dentiai.atlassian.net" {
+		t.Fatalf("links Jira base URL should come from session config: %q", cfg.Links.JiraBaseURL)
 	}
 	if got := strings.Join(cfg.Status.Statuses, ","); got != "backlog,doing" {
 		t.Fatalf("statuses = %#v", cfg.Status.Statuses)
@@ -646,6 +655,21 @@ func TestValidateRejectsBadOrDuplicateURLScheme(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsInvalidJiraBaseURL(t *testing.T) {
+	for _, baseURL := range []string{
+		"dentiai.atlassian.net",
+		"ftp://dentiai.atlassian.net",
+		"https://dentiai.atlassian.net?project=INF",
+		"https://dentiai.atlassian.net#issues",
+	} {
+		cfg := Default()
+		cfg.Links.JiraBaseURL = baseURL
+		if err := Validate(cfg); err == nil || !strings.Contains(err.Error(), "links.jira_base_url") {
+			t.Fatalf("expected invalid Jira base URL %q to fail, got %v", baseURL, err)
+		}
+	}
+}
+
 func TestLoadNormalizesURLSchemes(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte("[links]\nurl_schemes = [\" HTTPS \", \"Slack\"]\n"), 0644); err != nil {
@@ -683,6 +707,7 @@ func TestSampleConfigIsToml(t *testing.T) {
 		`bootstrap_file = ".tmux-sessionizer"`,
 		"[links]",
 		`url_schemes = ["http", "https", "slack", "tg"]`,
+		`jira_base_url = ""`,
 		"[links.alternate]",
 		`key = "alt-enter"`,
 		`file_command = "open -a TextEdit"`,

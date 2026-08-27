@@ -161,7 +161,9 @@ titles independently of this normal-pane display rule.
 
 The picker uses ANSI colors through `fzf --ansi`:
 
-- row kinds: blue
+- URL row kinds: yellow
+- Jira row kinds: magenta
+- other row kinds: blue
 - palette session and project names: cyan + bold
 - agent session labels: bold, using that session root's configured
   `[session].color` (cyan by default); named options cover terminal default,
@@ -316,6 +318,10 @@ an error instead of hanging indefinitely.
 - URLs whose scheme appears in `links.url_schemes`, defaulting to `http`,
   `https`, `slack`, and `tg`; configured scheme names are case-insensitive and
   local config replaces the inherited list
+- uppercase Jira issue keys matching `<PROJECT>-<NUMBER>` when
+  `links.jira_base_url` is non-empty; targets are
+  `<jira_base_url>/browse/<ISSUE-KEY>`, rows use the `jira` kind, captured Jira
+  browse URLs are canonicalized to the same target, and duplicates are omitted
 - absolute file paths with optional `:line`, `:line:column`, or `:start-end`
 - relative file paths with optional `:line`, `:line:column`, or `:start-end`,
   resolved from the origin pane directory
@@ -506,6 +512,7 @@ border = "rounded"
 
 [links]
 url_schemes = ["http", "https", "slack", "tg"]
+jira_base_url = ""
 
 [links.open]
 mode = "popup"

@@ -194,6 +194,8 @@ border = "rounded"
 
 [links]
 url_schemes = ["http", "https", "slack", "tg"]
+# Set this in a project/session-local .tmux-menu.conf when needed.
+jira_base_url = ""
 
 [links.alternate]
 key = "alt-enter"
@@ -405,18 +407,29 @@ Controls all picker tmux popups:
 
 - URLs whose scheme is listed in `links.url_schemes`; defaults are `http`,
   `https`, `slack`, and `tg`
+- uppercase Jira issue keys such as `INF-220` and `VAPC-1234` when
+  `links.jira_base_url` is configured
 - absolute file paths with optional line/column/range suffixes
 - relative file paths resolved from the origin pane directory
 
 ```toml
 [links]
 url_schemes = ["http", "https", "slack", "tg"]
+jira_base_url = "https://dentiai.atlassian.net"
 ```
 
-Local config replaces the inherited list. Scheme names are case-insensitive and
-must use URI scheme syntax. Add schemes such as `mailto`, `zoommtg`, or
-`obsidian` only when useful; keeping the list narrow avoids unrelated text in
-scrollback becoming selectable links.
+A local `url_schemes` setting replaces the inherited list. Scheme names are
+case-insensitive and must use URI scheme syntax. Add schemes such as `mailto`,
+`zoommtg`, or `obsidian` only when useful; keeping the list narrow avoids
+unrelated text in scrollback becoming selectable links.
+
+`jira_base_url` is optional and is best set in the tmux session root's local
+`.tmux-menu.conf`. It must be an absolute HTTP(S) URL without credentials,
+query, or fragment. A trailing slash is ignored. With the value above,
+`INF-234` becomes `https://dentiai.atlassian.net/browse/INF-234`. Duplicate
+mentions and captured full Jira URLs produce one canonical `jira` row;
+Markdown/code suffixes such as an encoded trailing backtick are removed.
+Lowercase or word-embedded lookalikes are ignored.
 
 Enter first copies the target to the macOS clipboard. URL rows run `open`.
 File rows use `[links.open]`.

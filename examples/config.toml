@@ -114,6 +114,8 @@ border = "rounded"
 [links]
 # URL schemes extracted from pane scrollback. Local config replaces this list.
 url_schemes = ["http", "https", "slack", "tg"]
+# Optional Jira root for issue keys such as INF-234. Prefer a local config.
+jira_base_url = ""
 
 [links.alternate]
 # Secondary opener used by Alt-Enter in the links view.
