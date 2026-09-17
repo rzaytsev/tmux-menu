@@ -12,6 +12,7 @@ import (
 	"tmux-menu/internal/action"
 	"tmux-menu/internal/agentstatus"
 	"tmux-menu/internal/config"
+	"tmux-menu/internal/displaytext"
 	"tmux-menu/internal/picker"
 	"tmux-menu/internal/shellquote"
 	"tmux-menu/internal/tmux"
@@ -23,6 +24,7 @@ type menuItem struct {
 	alternateDispatch action.Dispatch
 	agentPaneID       string
 	agentAckToken     string
+	copyTarget        string
 }
 
 var execTmux = tmux.Exec
@@ -38,7 +40,7 @@ func init() {
 
 func main() {
 	if err := run(context.Background(), os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "tmux-menu:", err)
+		fmt.Fprintln(os.Stderr, "tmux-menu:", displaytext.Line(err.Error()))
 		os.Exit(1)
 	}
 }
@@ -62,6 +64,8 @@ func run(ctx context.Context, args []string) error {
 		return runPickerLoop(ctx, "links")
 	case "bookmarks":
 		return runPickerLoop(ctx, "bookmarks")
+	case "docs":
+		return runPickerLoop(ctx, "docs")
 	case "status":
 		return runPickerLoop(ctx, "status")
 	case "validate-config":
@@ -97,6 +101,7 @@ Usage:
   tmux-menu popup projects
   tmux-menu popup links
   tmux-menu popup bookmarks
+  tmux-menu popup docs
   tmux-menu popup status
   tmux-menu palette
   tmux-menu agents
@@ -105,6 +110,7 @@ Usage:
   tmux-menu projects
   tmux-menu links
   tmux-menu bookmarks
+  tmux-menu docs
   tmux-menu status
   tmux-menu validate-config [config ...]
   tmux-menu agent-hook ingest <codex|claude>
@@ -126,7 +132,7 @@ func runPopup(ctx context.Context, args []string) error {
 	}
 	mode := args[0]
 	if !validViewMode(mode) {
-		return fmt.Errorf("popup mode must be palette, agents, tools, projects, links, bookmarks, or status")
+		return fmt.Errorf("popup mode must be palette, agents, tools, projects, links, bookmarks, docs, or status")
 	}
 	rt, err := loadRuntimeContext(ctx)
 	if err != nil {
@@ -248,9 +254,9 @@ func buildPopupCommand(exe, dispatchPath string, rt runtimeContext, args []strin
 	return strings.Join(parts, " ")
 }
 
-var viewSwitchKeys = []string{"tab", "btab", "alt-1", "alt-2", "alt-3", "alt-4", "alt-5", "alt-6"}
+var viewSwitchKeys = []string{"tab", "btab", "alt-1", "alt-2", "alt-3", "alt-4", "alt-5", "alt-6", "alt-7", "alt-8", "ctrl-r"}
 
-const viewSwitchHelp = "Tab:Next  Shift-Tab:Previous | Alt+ 1:Main  2:Agents  3:Tools  4:Projects  5:Status  6:Bookmarks"
+const viewSwitchHelp = "Tab/Shift-Tab: views  Ctrl-R: refresh\nAlt: 1 Main  2 Agents  3 Tools\nAlt: 4 Projects  5 Status  6 Bookmarks\nAlt: 7 Links  8 Docs"
 const popupViewDispatchMode = "picker-view"
 
 func viewSwitchFooter() string {
@@ -277,6 +283,10 @@ func viewModeForKey(key string) string {
 		return "status"
 	case "alt-6":
 		return "bookmarks"
+	case "alt-7":
+		return "links"
+	case "alt-8":
+		return "docs"
 	default:
 		return ""
 	}
@@ -303,7 +313,7 @@ func tabViewMode(current string, key string, order []string) string {
 
 func validViewMode(mode string) bool {
 	switch mode {
-	case "palette", "agents", "tools", "projects", "links", "bookmarks", "status":
+	case "palette", "agents", "tools", "projects", "links", "bookmarks", "docs", "status":
 		return true
 	default:
 		return false
@@ -329,6 +339,9 @@ func runPickerLoop(ctx context.Context, mode string) error {
 					return err
 				}
 			}
+			continue
+		}
+		if result.Key == "ctrl-r" {
 			continue
 		}
 		next := viewModeForKey(result.Key)
@@ -379,6 +392,12 @@ func runStatusCommand(ctx context.Context, command string, rt runtimeContext) er
 
 func dispatchForResult(result picker.Result[menuItem]) action.Dispatch {
 	item := result.Value
+	if result.Key == "ctrl-y" {
+		if item.copyTarget == "" {
+			return action.Dispatch{}
+		}
+		return linkClipboardDispatch(item.copyTarget)
+	}
 	if result.Key != "" && result.Key == item.alternateKey && item.alternateDispatch.Mode != "" {
 		return item.alternateDispatch
 	}
@@ -399,6 +418,8 @@ func selectModeAt(ctx context.Context, mode, initialAgentPaneID string) (picker.
 		return selectLinks(ctx)
 	case "bookmarks":
 		return selectBookmarks(ctx)
+	case "docs":
+		return selectDocs(ctx)
 	case "status":
 		return selectStatus(ctx)
 	default:

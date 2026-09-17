@@ -66,6 +66,9 @@ func (s *Store) Apply(ctx context.Context, event Event) (Annotation, Decision, e
 	}
 	next, decision := reduce(previous, event, s.policy)
 	if decision.Applied {
+		if err := validateRecord(next); err != nil {
+			return Annotation{}, decision, err
+		}
 		if err := writeJSONAtomic(path, next); err != nil {
 			return Annotation{}, decision, err
 		}
@@ -566,6 +569,11 @@ func (s *Store) lockNamed(ctx context.Context, name string) (func(), error) {
 func readRecord(path string) (record, error) {
 	var value record
 	err := readJSONFile(path, &value)
+	// Older child-first events left the unobserved parent state empty.
+	// Normalize only that known shape; keep this read side-effect free.
+	if err == nil && value.Version == 1 && value.State == "" && len(value.Children) > 0 {
+		value.State = StateUnknown
+	}
 	if err == nil {
 		err = validateRecord(value)
 	}

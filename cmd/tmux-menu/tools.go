@@ -9,6 +9,7 @@ import (
 
 	"tmux-menu/internal/action"
 	"tmux-menu/internal/config"
+	"tmux-menu/internal/fileutil"
 	"tmux-menu/internal/picker"
 	"tmux-menu/internal/shellquote"
 )
@@ -126,7 +127,7 @@ func makefileTargetsForDirs(dirs ...string) []makefileTarget {
 }
 
 func makefileTargetsInDir(dir string) []makefileTarget {
-	b, err := os.ReadFile(filepath.Join(dir, "Makefile"))
+	b, err := fileutil.Read(filepath.Join(dir, "Makefile"), 1<<20)
 	if err != nil {
 		return nil
 	}
@@ -187,7 +188,7 @@ func isMakeVariableAssignment(line string) bool {
 }
 
 func validMakeTarget(name string) bool {
-	if name == "" || strings.HasPrefix(name, ".") || strings.Contains(name, "%") {
+	if name == "" || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "-") || strings.Contains(name, "%") {
 		return false
 	}
 	for _, r := range name {

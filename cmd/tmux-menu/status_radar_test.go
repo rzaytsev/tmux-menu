@@ -73,6 +73,43 @@ func TestCollectStatusRadarShowsReporterTimeout(t *testing.T) {
 	}
 }
 
+func TestReporterTimeoutBoundsInheritedPipes(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := runStatusReporter(ctx, config.StatusTarget{Command: "sleep 2 & wait"}, tmux.Pane{SessionPath: t.TempDir()}, runtimeContext{})
+	if err == nil {
+		t.Fatal("expected timeout")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("reporter timeout waited for descendant pipes: %s", elapsed)
+	}
+}
+
+func TestReporterStopsOnOutputOverflow(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	start := time.Now()
+	_, err := runStatusReporter(ctx, config.StatusTarget{Command: "yes overflow"}, tmux.Pane{SessionPath: t.TempDir()}, runtimeContext{})
+	if err == nil || !strings.Contains(err.Error(), "exceeds") || time.Since(start) > 2*time.Second {
+		t.Fatalf("overflow failed to stop reporter promptly: %v (%s)", err, time.Since(start))
+	}
+}
+
+func TestFailedReporterKeepsLiveSessionSwitchable(t *testing.T) {
+	reports := collectStatusRadar(context.Background(), []config.StatusTarget{{Session: "work", Command: "exit 1"}}, []tmux.Pane{{SessionName: "work", SessionID: "$8", SessionPath: t.TempDir()}}, runtimeContext{}, time.Second)
+	if len(reports) != 1 || !reports[0].Available || reports[0].Session.SessionID != "$8" || reports[0].Status != "unknown" {
+		t.Fatalf("failed reporter hid its live session: %#v", reports)
+	}
+}
+
+func TestRadarPreviewStripsActiveTerminalSequences(t *testing.T) {
+	preview := statusRadarPreview(statusRadarReport{Blocks: []statusRadarBlock{{Title: "Title", Summary: "\x1b]52;c;SECRET\a", Details: "line1\nline2\x1b[2J"}}})
+	if strings.Contains(preview, "SECRET") || strings.Contains(preview, "\x1b[2J") || !strings.Contains(preview, "line1\x1b[0m\nline2") {
+		t.Fatalf("unsafe preview: %q", preview)
+	}
+}
+
 func TestRunStatusReporterRejectsInvalidBlockStatus(t *testing.T) {
 	target := config.StatusTarget{
 		Title:   "Bad",

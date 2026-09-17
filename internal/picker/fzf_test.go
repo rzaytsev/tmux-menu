@@ -87,7 +87,7 @@ func TestBuildFZFArgsAddsPreviewForHiddenPreviewField(t *testing.T) {
 		"--delimiter\n\t",
 		"--with-nth\n3..",
 		"--footer\nAlt-1 main",
-		"--preview\nglow {2}",
+		"--preview\nglow {s2}",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("fzf args missing %q:\n%s", want, got)

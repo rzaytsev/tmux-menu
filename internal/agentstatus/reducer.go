@@ -79,6 +79,7 @@ func reduce(previous record, event Event, policy Policy) (record, Decision) {
 			Pane:              event.Pane,
 			Provider:          event.Provider,
 			ProviderSessionID: event.ProviderSessionID,
+			State:             StateUnknown,
 			RetiredSessionIDs: retired,
 			Children:          map[string]childRecord{},
 		}

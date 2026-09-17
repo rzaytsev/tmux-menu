@@ -1,7 +1,7 @@
 BIN := bin/tmux-menu
 PREFIX ?= $(HOME)/.local
 
-.PHONY: build test race vet validate validate-config coverage install sample-config config run palette agents tools projects links bookmarks status status-new clean
+.PHONY: build test race vet validate validate-config coverage install sample-config config run palette agents tools projects links bookmarks docs status status-new clean
 
 build:
 	go build -o $(BIN) ./cmd/tmux-menu
@@ -53,6 +53,9 @@ links:
 
 bookmarks:
 	go run ./cmd/tmux-menu popup bookmarks
+
+docs:
+	go run ./cmd/tmux-menu popup docs
 
 status:
 	go run ./cmd/tmux-menu popup status

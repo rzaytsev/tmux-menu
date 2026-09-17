@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -12,6 +13,7 @@ import (
 
 	"tmux-menu/internal/action"
 	"tmux-menu/internal/config"
+	"tmux-menu/internal/fileutil"
 	linkscan "tmux-menu/internal/links"
 	"tmux-menu/internal/picker"
 	"tmux-menu/internal/shellquote"
@@ -36,7 +38,7 @@ func selectBookmarks(ctx context.Context) (picker.Result[menuItem], error) {
 	if err != nil {
 		return picker.Result[menuItem]{}, err
 	}
-	return picker.SelectWithExpect(ctx, "bookmarks> ", items, viewSwitchKeys, viewSwitchFooter())
+	return picker.SelectWithExpect(ctx, "bookmarks> ", items, filePickerKeys(), "Ctrl-Y copy target\n"+viewSwitchFooter())
 }
 
 func bookmarkItems(cfg config.BookmarksConfig, editor config.EditorConfig, projectName string) ([]picker.Item[menuItem], error) {
@@ -46,9 +48,13 @@ func bookmarkItems(cfg config.BookmarksConfig, editor config.EditorConfig, proje
 	}
 	items := make([]picker.Item[menuItem], 0, len(links))
 	for _, link := range links {
+		target := link.Target
+		if !isHTTPBookmark(target) {
+			target = resolveBookmarkFile(target, link.SourceFile)
+		}
 		items = append(items, picker.Item[menuItem]{
 			Label: bookmarkLabel(link),
-			Value: menuItem{dispatch: bookmarkDispatch(link, editor, cfg.Open)},
+			Value: menuItem{dispatch: bookmarkDispatch(link, editor, cfg.Open), copyTarget: target},
 		})
 	}
 	return items, nil
@@ -56,12 +62,17 @@ func bookmarkItems(cfg config.BookmarksConfig, editor config.EditorConfig, proje
 
 func collectBookmarks(cfg config.BookmarksConfig, projectName string) ([]bookmarkItem, error) {
 	links := make([]bookmarkItem, 0)
+	seen := make(map[string]bool)
 	for _, source := range bookmarkSources(cfg.Dirs, projectName) {
 		files, err := bookmarkMarkdownFiles(source.Path, cfg.IgnorePatterns)
 		if err != nil {
 			return nil, err
 		}
 		for _, file := range files {
+			if seen[file] {
+				continue
+			}
+			seen[file] = true
 			found, err := extractBookmarksFromFile(file, source.Name)
 			if err != nil {
 				return nil, err
@@ -109,6 +120,13 @@ func bookmarkSourceName(path string) string {
 }
 
 func bookmarkMarkdownFiles(root string, ignorePatterns []string) ([]string, error) {
+	return bookmarkMarkdownFilesContext(context.Background(), root, ignorePatterns)
+}
+
+func bookmarkMarkdownFilesContext(ctx context.Context, root string, ignorePatterns []string) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if _, err := os.Stat(root); err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -117,6 +135,9 @@ func bookmarkMarkdownFiles(root string, ignorePatterns []string) ([]string, erro
 	}
 	files := make([]string, 0)
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		if err != nil {
 			return err
 		}
@@ -137,6 +158,9 @@ func bookmarkMarkdownFiles(root string, ignorePatterns []string) ([]string, erro
 			return nil
 		}
 		if strings.EqualFold(filepath.Ext(path), ".md") {
+			if len(files) >= 10000 {
+				return fmt.Errorf("Markdown scan exceeds 10000 files; narrow the configured directories or ignore patterns")
+			}
 			files = append(files, path)
 		}
 		return nil
@@ -172,7 +196,10 @@ func bookmarkPathIgnored(rel string, patterns []string) bool {
 }
 
 func extractBookmarksFromFile(path string, sourceName string) ([]bookmarkItem, error) {
-	b, err := os.ReadFile(path)
+	b, err := fileutil.Read(path, 1<<20)
+	if errors.Is(err, fileutil.ErrTooLarge) || errors.Is(err, fileutil.ErrNotRegular) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}

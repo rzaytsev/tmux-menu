@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"unicode/utf8"
 
 	"tmux-menu/internal/action"
 	"tmux-menu/internal/config"
@@ -41,11 +42,12 @@ func linkMenuItem(item linkscan.Item, workingDir string, cfg config.Config) menu
 		dispatch:          linkDispatch(item, workingDir, cfg.Editor, cfg.Links.Open),
 		alternateKey:      cfg.Links.Alternate.Key,
 		alternateDispatch: linkAlternateDispatch(item, cfg.Links.Alternate),
+		copyTarget:        item.Target,
 	}
 }
 
 func linkExpectKeys(alt config.LinkAlternateConfig) []string {
-	keys := append([]string(nil), viewSwitchKeys...)
+	keys := filePickerKeys()
 	key := strings.TrimSpace(alt.Key)
 	if key == "" || containsLinkExpectKey(keys, key) {
 		return keys
@@ -63,7 +65,7 @@ func containsLinkExpectKey(keys []string, want string) bool {
 }
 
 func linkFooterForConfig(cfg config.Config) string {
-	footer := viewSwitchFooter()
+	footer := "Ctrl-Y copy only\n" + viewSwitchFooter()
 	if !cfg.Picker.ShowHelp || strings.TrimSpace(cfg.Links.Alternate.Key) == "" {
 		return footer
 	}
@@ -202,11 +204,12 @@ func editorCommand(item linkscan.Item, command string) string {
 }
 
 func truncate(s string, max int) string {
-	if max <= 0 || len(s) <= max {
+	if max <= 0 || utf8.RuneCountInString(s) <= max {
 		return s
 	}
+	runes := []rune(s)
 	if max <= 3 {
-		return s[:max]
+		return string(runes[:max])
 	}
-	return s[:max-3] + "..."
+	return string(runes[:max-3]) + "..."
 }

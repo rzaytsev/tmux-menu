@@ -19,7 +19,9 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"tmux-menu/internal/agentstatus"
+	"tmux-menu/internal/displaytext"
 	"tmux-menu/internal/shellquote"
+	"tmux-menu/internal/tmux"
 )
 
 const (
@@ -36,21 +38,28 @@ var (
 	agentHookInput          io.Reader = os.Stdin
 	agentHookProtocolOutput io.Writer = os.Stdout
 	agentHookCommandOutput            = func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		return exec.CommandContext(ctx, name, args...).CombinedOutput()
+		out, err := tmux.RunCommandBounded(ctx, nil, 64<<10, name, args...)
+		return []byte(out), err
 	}
 	agentHookTmuxOutput = func(ctx context.Context, args ...string) ([]byte, error) {
-		return exec.CommandContext(ctx, "tmux", args...).Output()
+		out, err := tmux.RunCommandBounded(ctx, nil, 256<<10, "tmux", args...)
+		return []byte(out), err
 	}
 	agentHookProcessOutput = func(ctx context.Context) ([]byte, error) {
-		return exec.CommandContext(ctx, "ps", "-axo", "pid=,ppid=,state=,command=").Output()
+		out, err := tmux.RunCommandBounded(ctx, nil, 4<<20, "ps", "-axo", "pid=,ppid=,state=,comm=")
+		return []byte(out), err
 	}
 	agentHookCurrentPID               = os.Getpid
 	agentHookProviderAncestorResolver = resolveAgentHookProviderAncestor
+	agentPreviewListPanes             = tmux.ListPanes
 )
 
 // agentPreviewData is the metadata frozen for one Agents picker generation.
 // It deliberately excludes prompts, transcripts, tool input, and model output.
 type agentPreviewData struct {
+	SessionID       string   `json:"session_id,omitempty"`
+	WindowID        string   `json:"window_id,omitempty"`
+	PanePID         string   `json:"pane_pid,omitempty"`
 	State           string   `json:"state"`
 	Provider        string   `json:"provider"`
 	ProviderSession string   `json:"provider_session,omitempty"`
@@ -829,6 +838,8 @@ func agentPreviewCommandForSnapshot(executable, snapshotPath string) string {
 }
 
 func runAgentPreview(ctx context.Context, snapshotPath, paneID string, out io.Writer) error {
+	ctx, cancel := context.WithTimeout(ctx, 900*time.Millisecond)
+	defer cancel()
 	if !validStableTmuxID(paneID, '%') {
 		return fmt.Errorf("invalid preview pane ID")
 	}
@@ -840,18 +851,45 @@ func runAgentPreview(ctx context.Context, snapshotPath, paneID string, out io.Wr
 	if !ok {
 		return fmt.Errorf("pane is not present in frozen preview")
 	}
-	printAgentPreviewHeader(out, row)
+	var header bytes.Buffer
+	printAgentPreviewHeader(&header, row)
+	fmt.Fprint(out, displaytext.Block(header.String()))
+	if !agentPreviewIdentityLive(ctx, paneID, row) {
+		fmt.Fprintln(out, "\n[pane changed or unavailable; Ctrl-R to refresh]")
+		return nil
+	}
 	captured, err := agentHookTmuxOutput(ctx, "capture-pane", "-e", "-p", "-S", "-"+strconv.Itoa(agentPreviewCaptureLines), "-t", paneID)
 	if err != nil {
 		fmt.Fprintln(out, "\n[scrollback unavailable]")
 		return nil
 	}
+	if !agentPreviewIdentityLive(ctx, paneID, row) {
+		fmt.Fprintln(out, "\n[pane changed during capture; Ctrl-R to refresh]")
+		return nil
+	}
 	trimmed := trimTrailingBlankLines(string(captured))
 	if trimmed != "" {
 		fmt.Fprintln(out)
-		fmt.Fprintln(out, trimmed)
+		fmt.Fprintln(out, displaytext.Block(trimmed))
 	}
 	return nil
+}
+
+func agentPreviewIdentityLive(ctx context.Context, paneID string, row agentPreviewData) bool {
+	if !tmux.IsCanonicalID(row.SessionID, '$') || !tmux.IsCanonicalID(row.WindowID, '@') || !canonicalPositiveDecimal(row.PanePID) {
+		return false
+	}
+	panes, err := agentPreviewListPanes(ctx)
+	if err != nil {
+		return false
+	}
+	matches := 0
+	for _, pane := range panes {
+		if pane.PaneID == paneID && pane.PanePID == row.PanePID && pane.SessionID == row.SessionID && pane.WindowID == row.WindowID {
+			matches++
+		}
+	}
+	return matches == 1
 }
 
 func readAgentPreviewSnapshot(path string) (agentPreviewSnapshot, error) {

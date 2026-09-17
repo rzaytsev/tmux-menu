@@ -16,6 +16,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/BurntSushi/toml"
+
+	"tmux-menu/internal/fileutil"
 )
 
 const appName = "tmux-menu"
@@ -43,6 +45,7 @@ type Config struct {
 	Editor    EditorConfig    `json:"editor" toml:"editor"`
 	Links     LinksConfig     `json:"links" toml:"links"`
 	Bookmarks BookmarksConfig `json:"bookmarks" toml:"bookmarks"`
+	Docs      DocsConfig      `json:"docs" toml:"docs"`
 	Status    StatusConfig    `json:"status" toml:"status"`
 }
 
@@ -134,6 +137,13 @@ type BookmarksConfig struct {
 	Open           OpenConfig `json:"open" toml:"open"`
 }
 
+type DocsConfig struct {
+	Dirs           []string   `json:"dirs" toml:"dirs"`
+	IgnorePatterns []string   `json:"ignore_patterns" toml:"ignore_patterns"`
+	PreviewCommand string     `json:"preview_command" toml:"preview_command"`
+	Open           OpenConfig `json:"open" toml:"open"`
+}
+
 type StatusConfig struct {
 	Command        string         `json:"command" toml:"command"`
 	StatusDirs     StringList     `json:"status_dir" toml:"status_dir"`
@@ -208,7 +218,7 @@ func Default() Config {
 		},
 		Picker: PickerConfig{
 			PreviewWidth: "60%",
-			TabOrder:     []string{"palette", "agents", "tools", "projects", "status", "bookmarks"},
+			TabOrder:     []string{"palette", "agents", "tools", "projects", "status", "bookmarks", "docs"},
 		},
 		Session: SessionConfig{
 			Color: DefaultSessionColor,
@@ -272,11 +282,17 @@ func Default() Config {
 		},
 		Bookmarks: BookmarksConfig{
 			Dirs:           []string{"~/notes/projects/{project}", "~/projects/{project}"},
-			IgnorePatterns: []string{".git", ".tmp", "vendor"},
+			IgnorePatterns: []string{".git", ".tmp", "vendor", "node_modules", ".venv"},
 			Open: OpenConfig{
 				Mode:     "pane",
 				PaneSide: "right",
 			},
+		},
+		Docs: DocsConfig{
+			Dirs:           []string{"~/notes/projects/{project}", "."},
+			IgnorePatterns: []string{".git", ".tmp", "vendor", "node_modules", ".venv"},
+			PreviewCommand: "glow",
+			Open:           OpenConfig{Mode: "pane", PaneSide: "right"},
 		},
 		Status: StatusConfig{
 			StatusDirs:     []string{"./todo"},
@@ -384,7 +400,7 @@ func configPaths(currentDir string, sessionRoot string) []string {
 }
 
 func loadConfigFile(path string, cfg *Config, strict bool) error {
-	b, err := os.ReadFile(path)
+	b, err := fileutil.Read(path, maxConfigFileBytes)
 	if err != nil {
 		return err
 	}
@@ -405,7 +421,7 @@ func loadConfigFileBounded(ctx context.Context, path string, cfg *Config, consum
 	if consume != nil && !consume(int(info.Size())) {
 		return ErrConfigBudget
 	}
-	f, err := os.Open(path)
+	f, err := fileutil.OpenRegular(path)
 	if err != nil {
 		return err
 	}
@@ -607,6 +623,21 @@ func overlayDefined(dst *Config, src Config, meta toml.MetaData) {
 	if meta.IsDefined("bookmarks", "open", "pane_side") {
 		dst.Bookmarks.Open.PaneSide = src.Bookmarks.Open.PaneSide
 	}
+	if meta.IsDefined("docs", "dirs") {
+		dst.Docs.Dirs = src.Docs.Dirs
+	}
+	if meta.IsDefined("docs", "ignore_patterns") {
+		dst.Docs.IgnorePatterns = src.Docs.IgnorePatterns
+	}
+	if meta.IsDefined("docs", "preview_command") {
+		dst.Docs.PreviewCommand = src.Docs.PreviewCommand
+	}
+	if meta.IsDefined("docs", "open", "mode") {
+		dst.Docs.Open.Mode = src.Docs.Open.Mode
+	}
+	if meta.IsDefined("docs", "open", "pane_side") {
+		dst.Docs.Open.PaneSide = src.Docs.Open.PaneSide
+	}
 	if meta.IsDefined("status", "status_dir") {
 		dst.Status.StatusDirs = src.Status.StatusDirs
 	}
@@ -686,6 +717,7 @@ func normalizeConfig(cfg *Config) {
 	for _, open := range []*OpenConfig{
 		&cfg.Links.Open,
 		&cfg.Bookmarks.Open,
+		&cfg.Docs.Open,
 		&cfg.Status.Open,
 	} {
 		open.Mode = strings.TrimSpace(open.Mode)
@@ -807,6 +839,21 @@ func applyDefaults(cfg *Config) {
 	if cfg.Bookmarks.Open.PaneSide == "" {
 		cfg.Bookmarks.Open.PaneSide = def.Bookmarks.Open.PaneSide
 	}
+	if len(cfg.Docs.Dirs) == 0 {
+		cfg.Docs.Dirs = append([]string(nil), def.Docs.Dirs...)
+	}
+	if cfg.Docs.IgnorePatterns == nil {
+		cfg.Docs.IgnorePatterns = append([]string(nil), def.Docs.IgnorePatterns...)
+	}
+	if cfg.Docs.PreviewCommand == "" {
+		cfg.Docs.PreviewCommand = def.Docs.PreviewCommand
+	}
+	if cfg.Docs.Open.Mode == "" {
+		cfg.Docs.Open.Mode = def.Docs.Open.Mode
+	}
+	if cfg.Docs.Open.PaneSide == "" {
+		cfg.Docs.Open.PaneSide = def.Docs.Open.PaneSide
+	}
 	if len(cfg.Status.StatusDirs) == 0 {
 		cfg.Status.StatusDirs = append([]string(nil), def.Status.StatusDirs...)
 	}
@@ -846,9 +893,9 @@ func Validate(cfg Config) error {
 	seenTabModes := make(map[string]bool)
 	for i, mode := range cfg.Picker.TabOrder {
 		switch mode {
-		case "palette", "agents", "tools", "projects", "links", "status", "bookmarks":
+		case "palette", "agents", "tools", "projects", "links", "status", "bookmarks", "docs":
 		default:
-			return fmt.Errorf("picker.tab_order[%d] must be one of palette, agents, tools, projects, links, status, bookmarks", i)
+			return fmt.Errorf("picker.tab_order[%d] must be one of palette, agents, tools, projects, links, status, bookmarks, docs", i)
 		}
 		if seenTabModes[mode] {
 			return fmt.Errorf("picker.tab_order[%d] duplicates %q", i, mode)
@@ -905,6 +952,17 @@ func Validate(cfg Config) error {
 			return fmt.Errorf("bookmarks.dirs[%d] is required", i)
 		}
 	}
+	for i, dir := range cfg.Docs.Dirs {
+		if strings.TrimSpace(dir) == "" {
+			return fmt.Errorf("docs.dirs[%d] is required", i)
+		}
+	}
+	if err := validateLinkAlternateCommand("docs.preview_command", cfg.Docs.PreviewCommand); err != nil {
+		return err
+	}
+	if err := validateOpenConfig("docs.open", cfg.Docs.Open); err != nil {
+		return err
+	}
 	seenURLSchemes := make(map[string]bool)
 	for i, scheme := range cfg.Links.URLSchemes {
 		if !validURLScheme(scheme) {
@@ -930,6 +988,9 @@ func Validate(cfg Config) error {
 		return err
 	}
 	if err := validateLinkAlternateCommand("links.alternate.url_command", cfg.Links.Alternate.URLCommand); err != nil {
+		return err
+	}
+	if err := validateLinkAlternateCommand("status.preview_command", cfg.Status.PreviewCommand); err != nil {
 		return err
 	}
 	if err := validateOpenConfig("links.open", cfg.Links.Open); err != nil {
@@ -1029,7 +1090,7 @@ func validateLinkAlternateKey(key string) error {
 		return fmt.Errorf("links.alternate.key must be one fzf key without commas or whitespace")
 	}
 	switch key {
-	case "enter", "tab", "btab", "alt-1", "alt-2", "alt-3", "alt-4", "alt-5", "alt-6":
+	case "enter", "tab", "btab", "alt-1", "alt-2", "alt-3", "alt-4", "alt-5", "alt-6", "alt-7", "alt-8", "ctrl-r", "ctrl-y":
 		return fmt.Errorf("links.alternate.key %q is reserved for picker behavior", key)
 	default:
 		return nil
@@ -1101,10 +1162,10 @@ sections = ["sessions", "panes"]
 [picker]
 # Show optional view-specific helper text.
 show_help = false
-# Width of right-side previews in agents and status.
+# Width of right-side previews in picker views.
 preview_width = "60%%"
 # View order for Tab and Shift-Tab navigation.
-tab_order = ["palette", "agents", "tools", "projects", "status", "bookmarks"]
+tab_order = ["palette", "agents", "tools", "projects", "status", "bookmarks", "docs"]
 
 [session]
 # All supported session-name colors:
@@ -1230,10 +1291,21 @@ pane_side = "right"
 # Markdown directories scanned by the bookmarks view, in display order.
 # {project} expands to the current tmux project/session name.
 dirs = ["~/notes/projects/{project}", "~/projects/{project}"]
-ignore_patterns = [".git", ".tmp", "vendor"]
+ignore_patterns = [".git", ".tmp", "vendor", "node_modules", ".venv"]
 
 [bookmarks.open]
 # Opener for local file bookmarks: popup, pane, or window.
+mode = "pane"
+pane_side = "right"
+
+[docs]
+# Markdown documents; relative paths resolve from the tmux session root.
+# {project} expands to the current project name.
+dirs = ["~/notes/projects/{project}", "."]
+ignore_patterns = [".git", ".tmp", "vendor", "node_modules", ".venv"]
+preview_command = "glow"
+
+[docs.open]
 mode = "pane"
 pane_side = "right"
 

@@ -79,8 +79,8 @@ func selectAgentsAt(ctx context.Context, initialPaneID string) (picker.Result[me
 	}
 	defer cleanupPreview()
 	previewCommand := agentPreviewCommandForSnapshot(executable, previewPath)
-	keys := append(append([]string(nil), viewSwitchKeys...), "ctrl-r", "ctrl-x")
-	return picker.SelectWithExpectAndPreviewOptions(ctx, "agents> ", items, keys, "", previewCommand, picker.Options{
+	keys := append(append([]string(nil), viewSwitchKeys...), "ctrl-x")
+	return picker.SelectWithExpectAndPreviewOptions(ctx, "agents> ", items, keys, viewSwitchFooter(), previewCommand, picker.Options{
 		PreviewWindow: agentPreviewWindow(agentTerminalRows()),
 		InitialIndex:  agentInitialIndex(items, initialPaneID),
 	})
@@ -345,6 +345,9 @@ func agentPreviewRows(rows []agentRow, now time.Time) map[string]agentPreviewDat
 			age = compactAgentAge(now.Sub(row.updatedAt))
 		}
 		preview[row.pane.PaneID] = agentPreviewData{
+			SessionID:       row.pane.SessionID,
+			WindowID:        row.pane.WindowID,
+			PanePID:         row.pane.PanePID,
 			State:           string(row.status),
 			Provider:        nonEmpty(string(row.provider), row.name),
 			ProviderSession: row.providerSession,
@@ -684,6 +687,10 @@ func agentPaneName(p tmux.Pane, snapshot processSnapshot) string {
 	if name := knownAgentName(p.CurrentCommand); name != "" {
 		return name
 	}
+	if codexPaneTitleHasExplicitRunState(p.PaneTitle) ||
+		(p.WindowName != p.PaneTitle && codexPaneTitleHasExplicitRunState(p.WindowName)) {
+		return "codex"
+	}
 	if name := knownAgentName(p.PaneTitle); name != "" {
 		return name
 	}
@@ -698,6 +705,12 @@ func agentPaneName(p tmux.Pane, snapshot processSnapshot) string {
 		return "claude"
 	}
 	return "agent"
+}
+
+func codexPaneTitleHasExplicitRunState(title string) bool {
+	parts := strings.Split(title, "|")
+	_, ok := codexRunStateStatus(strings.TrimSpace(parts[len(parts)-1]))
+	return ok
 }
 
 type codexPaneTitleInfo struct {
@@ -922,7 +935,7 @@ type processSnapshot struct {
 }
 
 func agentProcessSnapshotBounded(ctx context.Context, budget *tmux.OutputBudget, maxBytes int64) processSnapshot {
-	out, err := tmux.RunCommandBounded(ctx, budget, maxBytes, "ps", "-axo", "pid=,ppid=,state=,command=")
+	out, err := tmux.RunCommandBounded(ctx, budget, maxBytes, "ps", "-axo", "pid=,ppid=,state=,comm=")
 	if err != nil {
 		return processSnapshot{}
 	}

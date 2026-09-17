@@ -156,6 +156,26 @@ func TestAgentProcessSnapshotBoundedFailsClosedAtSharedOutputCap(t *testing.T) {
 	}
 }
 
+func TestAgentProcessSnapshotReadsExecutableNamesWithoutArguments(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ps")
+	script := `#!/bin/sh
+if [ "$2" != "pid=,ppid=,state=,comm=" ]; then
+	exit 23
+fi
+printf '100 1 S /bin/zsh\n200 100 S /Users/alice/.local/bin/claude\n'
+`
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	snapshot := agentProcessSnapshotBounded(t.Context(), tmux.NewOutputBudget(1024), 1024)
+	if !snapshot.available || !snapshot.roots[100] || snapshot.names[100] != "claude" {
+		t.Fatalf("compact executable process inventory did not discover Claude: %#v", snapshot)
+	}
+}
+
 func TestParseProcessListBoundedRejectsRowAndFieldOverflow(t *testing.T) {
 	valid := "100 1 S codex"
 	if _, ok := parseProcessListBounded(valid+"\n"+valid+"\n", 1, 64); ok {
@@ -496,6 +516,18 @@ func TestCodexPaneTitleStatusDoesNotRequireCodexCommand(t *testing.T) {
 	})
 	if got != agentStatusWorking {
 		t.Fatalf("agentPaneStatus() = %q, want working from Codex pane title", got)
+	}
+}
+
+func TestAgentPaneNamePrefersStructuredCodexTitleOverThreadWords(t *testing.T) {
+	pane := tmux.Pane{
+		PanePID:        "1234",
+		CurrentCommand: "node",
+		PaneTitle:      "\u2819 Fix missing Claude agents | Working",
+	}
+
+	if got := agentPaneName(pane, processSnapshot{}); got != "codex" {
+		t.Fatalf("agentPaneName() = %q, want codex", got)
 	}
 }
 
@@ -1102,7 +1134,7 @@ func TestStatusFooterShowsBoardHelpAndNavigation(t *testing.T) {
 	cfg.Status.Statuses = []string{"backlog", "doing", "done"}
 
 	got := statusFooter(cfg)
-	want := "BACKLOG / DOING / DONE | Space preview | Enter edit | Ctrl-C cancel\n" + viewSwitchHelp
+	want := "BACKLOG / DOING / DONE | Space preview | Enter edit | Ctrl-Y copy path | Ctrl-C cancel\n" + viewSwitchHelp
 	if got != want {
 		t.Fatalf("statusFooter() = %q, want %q", got, want)
 	}
@@ -1455,7 +1487,7 @@ func TestLinkExpectKeysIncludesCustomAlternateKey(t *testing.T) {
 	if !containsLinkExpectKey(keys, "ctrl-o") {
 		t.Fatalf("keys = %#v, want ctrl-o", keys)
 	}
-	if got, want := len(keys), len(viewSwitchKeys)+1; got != want {
+	if got, want := len(keys), len(viewSwitchKeys)+2; got != want {
 		t.Fatalf("len(keys) = %d, want %d", got, want)
 	}
 }

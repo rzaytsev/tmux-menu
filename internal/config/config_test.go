@@ -35,7 +35,7 @@ func TestLoadMissingUsesDefaults(t *testing.T) {
 	if cfg.Picker.PreviewWidth != "60%" {
 		t.Fatalf("unexpected picker preview width: %q", cfg.Picker.PreviewWidth)
 	}
-	if got := strings.Join(cfg.Picker.TabOrder, ","); got != "palette,agents,tools,projects,status,bookmarks" {
+	if got := strings.Join(cfg.Picker.TabOrder, ","); got != "palette,agents,tools,projects,status,bookmarks,docs" {
 		t.Fatalf("unexpected picker tab order: %q", got)
 	}
 	if cfg.Session.Color != DefaultSessionColor {
@@ -68,7 +68,7 @@ func TestLoadMissingUsesDefaults(t *testing.T) {
 	if got := strings.Join(cfg.Bookmarks.Dirs, ","); got != "~/notes/projects/{project},~/projects/{project}" {
 		t.Fatalf("unexpected bookmark dirs: %#v", cfg.Bookmarks.Dirs)
 	}
-	if got := strings.Join(cfg.Bookmarks.IgnorePatterns, ","); got != ".git,.tmp,vendor" {
+	if got := strings.Join(cfg.Bookmarks.IgnorePatterns, ","); got != ".git,.tmp,vendor,node_modules,.venv" {
 		t.Fatalf("unexpected bookmark ignore patterns: %#v", cfg.Bookmarks.IgnorePatterns)
 	}
 	if cfg.Popup.Width != "90%" || cfg.Popup.Height != "80%" {
@@ -552,6 +552,9 @@ func TestExampleConfigKeepsDocumentedDefaultsInSync(t *testing.T) {
 	if !reflect.DeepEqual(cfg.Bookmarks, def.Bookmarks) {
 		t.Fatalf("example bookmarks = %#v, want %#v", cfg.Bookmarks, def.Bookmarks)
 	}
+	if !reflect.DeepEqual(cfg.Docs, def.Docs) {
+		t.Fatalf("example docs = %#v, want %#v", cfg.Docs, def.Docs)
+	}
 	if !reflect.DeepEqual(cfg.Status, def.Status) {
 		t.Fatalf("example status = %#v, want %#v", cfg.Status, def.Status)
 	}
@@ -692,7 +695,7 @@ func TestSampleConfigIsToml(t *testing.T) {
 		`sections = ["sessions", "panes"]`,
 		"[picker]",
 		"show_help = false",
-		`tab_order = ["palette", "agents", "tools", "projects", "status", "bookmarks"]`,
+		`tab_order = ["palette", "agents", "tools", "projects", "status", "bookmarks", "docs"]`,
 		"[session]",
 		`color = "cyan"`,
 		"bright_green",
@@ -723,7 +726,7 @@ func TestSampleConfigIsToml(t *testing.T) {
 		`# command = "git status"`,
 		"[bookmarks]",
 		`dirs = ["~/notes/projects/{project}", "~/projects/{project}"]`,
-		`ignore_patterns = [".git", ".tmp", "vendor"]`,
+		`ignore_patterns = [".git", ".tmp", "vendor", "node_modules", ".venv"]`,
 		"[status]",
 		`status_dir = ["./todo"]`,
 		`statuses = ["new", "doing", "done"]`,

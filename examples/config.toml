@@ -5,10 +5,10 @@ sections = ["sessions", "panes"]
 [picker]
 # Show optional view-specific helper text.
 show_help = false
-# Width of right-side previews in agents and status.
+# Width of right-side previews in picker views.
 preview_width = "60%"
 # View order for Tab and Shift-Tab navigation.
-tab_order = ["palette", "agents", "tools", "projects", "status", "bookmarks"]
+tab_order = ["palette", "agents", "tools", "projects", "status", "bookmarks", "docs"]
 
 [session]
 # All supported session-name colors:
@@ -18,7 +18,7 @@ tab_order = ["palette", "agents", "tools", "projects", "status", "bookmarks"]
 color = "cyan"
 
 [agents]
-# Dedicated Agent HUD / direct picker popup width. V1 adds no other HUD knobs.
+# Dedicated agents popup width; other views use popup.width.
 popup_width = "100%"
 
 [agents.icons]
@@ -134,17 +134,28 @@ pane_side = "right"
 # Markdown directories scanned by the bookmarks view, in display order.
 # {project} expands to the current tmux project/session name.
 dirs = ["~/notes/projects/{project}", "~/projects/{project}"]
-ignore_patterns = [".git", ".tmp", "vendor"]
+ignore_patterns = [".git", ".tmp", "vendor", "node_modules", ".venv"]
 
 [bookmarks.open]
 # Opener for local file bookmarks: popup, pane, or window.
 mode = "pane"
 pane_side = "right"
 
+[docs]
+# Markdown documents; relative paths resolve from the tmux session root.
+# {project} expands to the current project name.
+dirs = ["~/notes/projects/{project}", "."]
+ignore_patterns = [".git", ".tmp", "vendor", "node_modules", ".venv"]
+preview_command = "glow"
+
+[docs.open]
+mode = "pane"
+pane_side = "right"
+
 [status]
 # Optional command replacing the directory-based status picker for this config.
 # command = 'python3 "$TMUX_MENU_SESSION_PATH/scripts/todo.py"'
-# Timeout applied independently to every cross-project reporter.
+# Reporter timeout for each configured cross-project radar target.
 report_timeout = "3s"
 # Relative paths resolve from the current tmux session root.
 status_dir = ["./todo"]
@@ -153,8 +164,7 @@ statuses = ["new", "doing", "done"]
 preview_command = "glow"
 ignore_patterns = [".gitkeep"]
 
-# Add one reporter per active tmux session to enable the cross-project radar.
-# The command runs from that session's root and prints the documented JSON format.
+# Add one reporter per active tmux session to enable the radar view:
 # [[status.targets]]
 # title = "Example"
 # session = "example"

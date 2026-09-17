@@ -13,10 +13,12 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"tmux-menu/internal/action"
 	"tmux-menu/internal/config"
+	"tmux-menu/internal/displaytext"
 	"tmux-menu/internal/picker"
 	"tmux-menu/internal/tmux"
 )
@@ -29,10 +31,17 @@ const (
 )
 
 type statusRadarOutput struct {
-	bytes.Buffer
+	buffer    bytes.Buffer
 	Limit     int
 	Truncated bool
+	Cancel    context.CancelFunc
 }
+
+// Do not embed bytes.Buffer: its promoted ReadFrom would let io.Copy bypass
+// Write and therefore bypass the output limit for real subprocess pipes.
+func (output *statusRadarOutput) Len() int       { return output.buffer.Len() }
+func (output *statusRadarOutput) String() string { return output.buffer.String() }
+func (output *statusRadarOutput) Bytes() []byte  { return output.buffer.Bytes() }
 
 func (output *statusRadarOutput) Write(data []byte) (int, error) {
 	size := len(data)
@@ -41,10 +50,13 @@ func (output *statusRadarOutput) Write(data []byte) (int, error) {
 		if remaining > size {
 			remaining = size
 		}
-		_, _ = output.Buffer.Write(data[:remaining])
+		_, _ = output.buffer.Write(data[:remaining])
 	}
 	if remaining < size {
 		output.Truncated = true
+		if output.Cancel != nil {
+			output.Cancel()
+		}
 	}
 	return size, nil
 }
@@ -128,6 +140,8 @@ func collectStatusRadar(ctx context.Context, targets []config.StatusTarget, pane
 					message = "Reporter timed out after " + timeout.String()
 				}
 				reports[index] = failedStatusRadarReport(target, index, message)
+				reports[index].Session = session
+				reports[index].Available = true
 				return
 			}
 			status, summary := statusRadarRollup(blocks)
@@ -169,7 +183,20 @@ func runStatusReporter(ctx context.Context, target config.StatusTarget, session 
 	if strings.TrimSpace(session.SessionPath) == "" {
 		return nil, errors.New("target session path is unavailable")
 	}
-	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", target.Command)
+	reportCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cmd := exec.CommandContext(reportCtx, "/bin/sh", "-c", target.Command)
+	// Reporters own a process group: cancel descendants as well as the shell,
+	// and bound pipe draining even if a child leaves that group.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+		return err
+	}
+	cmd.WaitDelay = 100 * time.Millisecond
 	cmd.Stdin = strings.NewReader("")
 	cmd.Dir = session.SessionPath
 	cmd.Env = statusReporterEnv(os.Environ(), map[string]string{
@@ -180,19 +207,27 @@ func runStatusReporter(ctx context.Context, target config.StatusTarget, session 
 		"TMUX_MENU_SESSION_PATH": session.SessionPath,
 		"TMUX_MENU_STATUS_TITLE": target.Title,
 	})
-	stdout := statusRadarOutput{Limit: statusRadarMaxOutput}
+	stdout := statusRadarOutput{Limit: statusRadarMaxOutput, Cancel: cancel}
 	stderr := statusRadarOutput{Limit: statusRadarMaxErrorOutput}
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		message := cleanStatusText(stderr.String())
-		if message == "" {
-			message = err.Error()
-		}
-		return nil, fmt.Errorf("reporter failed: %s", truncateStatusText(message, 240))
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start reporter: %w", err)
 	}
+	runErr := cmd.Wait()
+	_ = cmd.Cancel() // Clean up remaining group members before parsing output.
 	if stdout.Truncated {
 		return nil, fmt.Errorf("reporter output exceeds %d bytes", statusRadarMaxOutput)
+	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if runErr != nil {
+		message := cleanStatusText(stderr.String())
+		if message == "" {
+			message = runErr.Error()
+		}
+		return nil, fmt.Errorf("reporter failed: %s", truncateStatusText(message, 240))
 	}
 
 	decoder := json.NewDecoder(bytes.NewReader(stdout.Bytes()))
@@ -357,7 +392,7 @@ func statusRadarPreview(report statusRadarReport) string {
 			fmt.Fprintf(&out, "\n%s\n", block.Details)
 		}
 	}
-	return out.String()
+	return displaytext.Block(out.String())
 }
 
 func colorStatusRadarBadge(status string) string {

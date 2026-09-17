@@ -20,6 +20,10 @@ footer shows those controls and the direct Alt-number shortcuts.
 The links picker recognizes configurable URL schemes, including HTTP(S), Slack,
 and Telegram deep links by default. A session-local Jira base URL can also turn
 issue keys such as `INF-234` into canonical `jira` browser-link rows.
+The docs picker searches Markdown titles and paths across project files and
+notes, with Space to preview and Enter to edit. Use `Alt-7` for links, `Alt-8`
+for docs, and `Ctrl-R` to refresh any picker. `Ctrl-Y` copies a link, bookmark
+target, document path, or task path without opening it.
 
 ## Requirements
 
@@ -27,7 +31,7 @@ issue keys such as `INF-234` into canonical `jira` browser-link rows.
 - tmux
 - fzf
 - macOS `open`/`pbcopy` for the default URL and clipboard actions
-- optional: `glow` for status-file previews
+- optional: `glow` for task and document previews
 
 ## Install
 
@@ -49,6 +53,7 @@ tmux-menu popup tools
 tmux-menu popup projects
 tmux-menu popup links
 tmux-menu popup bookmarks
+tmux-menu popup docs
 tmux-menu popup status
 tmux-menu validate-config ~/.tmux-menu.conf
 ```
@@ -83,3 +88,7 @@ GOCACHE=/tmp/tmux-menu-go-build make build
 GOCACHE=/tmp/tmux-menu-go-build make sample-config
 GOCACHE=/tmp/tmux-menu-go-build make validate-config
 ```
+
+Child-first hook events keep the unobserved parent state `unknown`. Older
+child-only records with an empty parent state are normalized on read without
+rewriting history; all newly persisted hook records are validated.

@@ -24,9 +24,10 @@ Work directly and keep changes small. This is a local tmux utility, not a framew
 - `tools`: configured commands, dynamic Makefile targets from the session root/current dir, and quick dirs.
 - `projects`: lists one-level directories under `projects.roots`, creates/switches tmux sessions natively, and shows whether the configured bootstrap file exists.
 - `links`: captures origin pane scrollback, extracts URL schemes configured by `links.url_schemes` (default HTTP, HTTPS, Slack, and Telegram) plus Jira issue keys when the session-local `links.jira_base_url` is set, copies selected targets, opens file refs through configured `links.open`, opens URLs with `open`, and supports a configured alternate opener.
-- `bookmarks`: scans inline Markdown links from `bookmarks.dirs` in configured order, default `["~/notes/projects/{project}", "~/projects/{project}"]`, skips path parts matching `bookmarks.ignore_patterns` defaulting to `.git`, `.tmp`, and `vendor`, opens HTTP(S) links with `open`, and opens local file links in a right-side editor pane.
+- `bookmarks`: scans inline Markdown links from `bookmarks.dirs` in configured order, default `["~/notes/projects/{project}", "~/projects/{project}"]`, skips path parts matching `bookmarks.ignore_patterns` defaulting to `.git`, `.tmp`, `vendor`, `node_modules`, and `.venv`, opens HTTP(S) links with `open`, and opens local file links in a right-side editor pane.
+- `docs`: scans Markdown titles and paths from `docs.dirs`, default notes for `{project}` plus the session root; Space previews, Enter edits, and overlapping roots deduplicate files.
 - `status`: when `status.targets` is configured, concurrently runs one JSON reporter per named active tmux session and shows urgency-sorted project rows with a visible block preview; otherwise it runs optional project-local `status.command` or shows the directory task board from `status.status_dir` and `status.statuses`.
-- Picker views support Tab/Shift-Tab through configured `picker.tab_order` and `Alt-1` main, `Alt-2` agents, `Alt-3` tools, `Alt-4` projects, `Alt-5` status, `Alt-6` bookmarks through `fzf --expect`; navigation shortcuts are shown in a persistent footer except in the HUD, while `picker.show_help` controls optional view-specific help.
+- Picker views support Tab/Shift-Tab through configured `picker.tab_order` and `Alt-1` main, `Alt-2` agents, `Alt-3` tools, `Alt-4` projects, `Alt-5` status, `Alt-6` bookmarks, `Alt-7` links, and `Alt-8` docs through `fzf --expect`; Ctrl-R refreshes every picker. Ctrl-Y copies targets/paths in links, bookmarks, docs, and directory status. Navigation shortcuts are shown in a persistent footer except in the HUD, while `picker.show_help` controls optional view-specific help.
 - Global config path: `~/.tmux-menu.conf`; local `.tmux-menu.conf` overlays in the session root and origin pane directory can add commands/quick dirs or replace scalar/list settings.
 
 ## Implementation Rules
@@ -88,6 +89,7 @@ Work directly and keep changes small. This is a local tmux utility, not a framew
 - Status `statuses` controls the visible status subdirectories and display order; directories not listed, such as `old`, are hidden.
 - Directory-board status previews use `fzf --preview` hidden by default and toggled with Space; `preview_command = "glow"` appends the selected file path, while commands containing `{}` replace that placeholder with the file path.
 - Status item preview fields must pass raw file paths to `fzf`; do not pre-shell-quote them.
+- Sanitize picker labels and generated previews with `internal/displaytext`; reject control-bearing raw preview fields. Pass preview targets separately from shell templates. Bound project-file reads and reject non-regular files through `internal/fileutil`.
 - Status labels are only `<status> | <title> | <summary>`; do not include a redundant `status` kind prefix or visible file path.
 - Status selections open the file through `editor.command` using configured `status.open`.
 - Link file selections use `editor` config for command and size plus configured `links.open`; default is `$EDITOR` in an 80% x 80% rounded popup.
@@ -99,17 +101,21 @@ Work directly and keep changes small. This is a local tmux utility, not a framew
 
 ## Validation
 
-Run:
+For Go behavior changes, run the affected package/test first, then once:
 
 ```sh
 GOCACHE=/tmp/tmux-menu-go-build make test
-GOCACHE=/tmp/tmux-menu-go-build make race
 GOCACHE=/tmp/tmux-menu-go-build make build
-GOCACHE=/tmp/tmux-menu-go-build make sample-config
-GOCACHE=/tmp/tmux-menu-go-build make validate-config
 ```
 
-Do not run interactive `make palette`, `make agents`, `make tools`, `make projects`, `make links`, `make bookmarks`, or `make status` unless the user explicitly wants the popup opened.
+Add `make race` for concurrency, hook state, or HUD lifecycle changes. Add
+`make sample-config` and `make validate-config` when config parsing, shape,
+defaults, or examples change. Use the same `GOCACHE` prefix for these checks.
+Documentation-only changes need a diff and affected-link/example review.
+Verify a changed picker/HUD flow in the real interface when authorized; a
+passing build does not establish that the installed launcher uses that build.
+
+Do not run interactive `make palette`, `make agents`, `make tools`, `make projects`, `make links`, `make bookmarks`, `make docs`, or `make status` unless the user explicitly wants the popup opened.
 
 ## Docs
 

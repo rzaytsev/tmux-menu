@@ -16,6 +16,7 @@ Views:
 - `projects`: create or switch tmux sessions for project directories.
 - `links`: open URLs and file references captured from pane scrollback.
 - `bookmarks`: open inline Markdown links from configured directories.
+- `docs`: find and preview project and notes Markdown files by title or path.
 - `status`: browse task files grouped by status directories.
 
 ## Commands
@@ -30,6 +31,7 @@ tmux-menu popup tools
 tmux-menu popup projects
 tmux-menu popup links
 tmux-menu popup bookmarks
+tmux-menu popup docs
 tmux-menu popup status
 ```
 
@@ -43,6 +45,7 @@ tmux-menu tools
 tmux-menu projects
 tmux-menu links
 tmux-menu bookmarks
+tmux-menu docs
 tmux-menu status
 tmux-menu validate-config ~/.tmux-menu.conf
 tmux-menu sample-config
@@ -89,6 +92,11 @@ Inside fzf picker views:
 - `Alt-4`: projects
 - `Alt-5`: status
 - `Alt-6`: bookmarks
+- `Alt-7`: links
+- `Alt-8`: docs
+- `Ctrl-R`: rebuild the current picker from fresh data
+- `Ctrl-Y` in links, bookmarks, docs, and the task board: copy the target/path
+  and close the picker without opening it
 - `Alt-Enter` in links: alternate opener
 
 The navigation shortcuts are shown in a footer at the bottom of every picker.
@@ -147,7 +155,7 @@ sections = ["sessions", "panes"]
 [picker]
 show_help = false
 preview_width = "60%"
-tab_order = ["palette", "agents", "tools", "projects", "status", "bookmarks"]
+tab_order = ["palette", "agents", "tools", "projects", "status", "bookmarks", "docs"]
 
 [session]
 color = "cyan"
@@ -208,7 +216,7 @@ pane_side = "right"
 
 [bookmarks]
 dirs = ["~/notes/projects/{project}", "~/projects/{project}"]
-ignore_patterns = [".git", ".tmp", "vendor"]
+ignore_patterns = [".git", ".tmp", "vendor", "node_modules", ".venv"]
 
 [bookmarks.open]
 mode = "pane"
@@ -252,7 +260,7 @@ sections = ["sessions", "panes"]
   picker. Defaults to `60%`; its height fills the picker popup.
 - `tab_order`: picker views visited by `Tab` and `Shift-Tab`, in order. Valid
   values are `palette`, `agents`, `tools`, `projects`, `links`, `status`, and
-  `bookmarks`. The default omits `links`, matching the numbered shortcuts.
+  `bookmarks`, and `docs`. The default omits `links`; `Alt-7` reaches it directly.
 
 ### `session`
 
@@ -445,7 +453,8 @@ File rows use `[links.open]`.
 - `file_command`: alternate file opener
 - `url_command`: alternate URL opener
 
-`Tab`, `Shift-Tab`, and `Alt-1` through `Alt-6` are reserved for view switching
+`Tab`, `Shift-Tab`, `Alt-1` through `Alt-8`, `Ctrl-R`, and `Ctrl-Y` are reserved
+for picker navigation, refresh, and copying
 and cannot be used as the alternate opener key. `enter`, commas, and whitespace
 are also invalid.
 
@@ -466,6 +475,31 @@ placeholders are supported.
 Only inline links shaped like `[label](target)` are shown. Raw URLs and image
 links are ignored. HTTP(S) targets open with `open`; local file targets resolve
 relative to the Markdown source file and use `[bookmarks.open]`.
+
+### `docs`
+
+`tmux-menu popup docs` lists `.md` files from `docs.dirs` in configured source
+order, with a file's first `# Heading` as its title and a filename fallback.
+The title and full path are searchable. Duplicate files from overlapping roots
+appear once. Relative directories resolve from the tmux session root, falling
+back to the origin pane directory; `{project}` expands to the project name.
+
+```toml
+[docs]
+dirs = ["~/notes/projects/{project}", "."]
+ignore_patterns = [".git", ".tmp", "vendor", "node_modules", ".venv"]
+preview_command = "glow"
+
+[docs.open]
+mode = "pane"
+pane_side = "right"
+```
+
+Press Space to toggle the preview, Enter to open with `editor.command`, or
+Ctrl-Y to copy the absolute path for an agent prompt. `docs.open` supports the
+same pane, popup, and window modes as bookmarks. Set `dirs = ["./docs", "./todo"]`
+in a project overlay to focus on its runbooks and tasks. The picker does not
+require a document to contain a Markdown link.
 
 ### `status`
 
@@ -550,6 +584,38 @@ The title comes from the filename. The summary is the first `summary: ...` line
 or `(no summary)`.
 
 `[status.open]` controls how selected files open.
+
+## Display and scanning limits
+
+Picker labels, generated radar previews, and agent previews allow printable
+text and passive ANSI styling. Terminal commands and bidirectional overrides
+are removed. Raw preview paths remain unchanged; paths containing control
+characters (including tabs/newlines) fail with an explicit error.
+
+Preview commands accept `{}` unquoted or double-quoted. tmux-menu passes the
+selected target as a separate shell argument, preserving quotes and whitespace.
+Single-quoted placeholders are rejected by config validation. Custom preview
+commands are executable configuration; use a renderer such as `glow` for task
+or document content you do not trust.
+
+Config files are limited to 1 MiB and must resolve to regular files. Bookmark
+Markdown files and Makefiles larger than 1 MiB are skipped. Document titles
+and task summaries read only the first 64 KiB. Keep `summary:` near the top of
+task files. Markdown scans stop with an error above 10,000 files per root;
+narrow directories or add ignore patterns if needed. Bookmark/document defaults
+exclude `.git`, `.tmp`, `vendor`, `node_modules`, and `.venv`; existing explicit
+ignore lists continue to replace defaults. Ignored task directories are pruned.
+
+Radar reporters stop on stdout overflow and their process groups are cleaned
+up when they finish or time out. A failed reporter remains an `unknown` row,
+and Enter can still reach its live session to investigate. Missing sessions
+remain display-only. The flat Agents preview checks the exact session, window,
+pane and pane PID before and after capture, with a 900 ms deadline and a
+256 KiB capture limit. A restarted pane requires Ctrl-R before previewing it.
+
+Project `.tmux-menu.conf` files, Makefile recipes, bootstraps, and configured
+commands execute as your user. Inspect these files before using executable
+actions from an unfamiliar project. The menu is not a sandbox for project code.
 
 ## Use Cases
 
@@ -680,3 +746,7 @@ Broader local check:
 ```sh
 GOCACHE=/tmp/tmux-menu-go-build make validate
 ```
+
+Child-first hook events keep the unobserved parent state `unknown`. Older
+child-only records with an empty parent state are normalized on read without
+rewriting history; all newly persisted hook records are validated.

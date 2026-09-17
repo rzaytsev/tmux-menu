@@ -68,13 +68,17 @@ Inside `fzf` picker views:
 - `Alt-4`: projects
 - `Alt-5`: status
 - `Alt-6`: bookmarks
+- `Alt-7`: links
+- `Alt-8`: docs
+- `Ctrl-R`: refresh the current picker
+- `Ctrl-Y`: copy only in links, bookmarks, docs, and directory status
 
 In the links view, `Alt-Enter` opens the selected row with the configured
 secondary opener.
 
 The shortcuts are shown in a persistent footer at the bottom of every picker.
 `picker.tab_order` controls the Tab cycle and defaults to palette, agents,
-tools, projects, status, then bookmarks. Configured values may also include
+tools, projects, status, bookmarks, then docs. Configured values may also include
 links. Cycling wraps at both ends; a view omitted from the order enters at the
 first item with Tab or the last item with Shift-Tab.
 Empty views contain a non-selectable `No items` row so navigation keys continue
@@ -364,7 +368,7 @@ The default source order is:
 `{project}` expands to the current tmux project/session name. Configured
 directories are scanned recursively in order. Missing roots are skipped. Path
 parts matching `bookmarks.ignore_patterns` are skipped; the default is
-`[".git", ".tmp", "vendor"]`. Only inline links shaped like `[label](target)`
+`[".git", ".tmp", "vendor", "node_modules", ".venv"]`. Only inline links shaped like `[label](target)`
 are shown; raw URLs and image links are ignored.
 
 Rows start with the source directory name and then show the Markdown label,
@@ -375,6 +379,39 @@ in the default browser. Selecting a local file target resolves it relative to
 the Markdown file containing the link, strips fragment/query suffixes, and opens
 the resolved file with `editor.command` using `bookmarks.open`. The default is a
 tmux pane split to the right of the origin pane.
+
+## Docs Mode
+
+`docs` lists `.md` files under `docs.dirs`, defaulting to
+`["~/notes/projects/{project}", "."]`. Relative roots resolve from the session
+root, then the origin directory. The first H1 in the first 64 KiB is the title;
+the filename is the fallback. Titles and paths are searchable, and overlapping
+roots do not duplicate a file. `docs.ignore_patterns` uses bookmark matching
+and defaults to `.git`, `.tmp`, `vendor`, `node_modules`, and `.venv`.
+Space toggles the preview (`docs.preview_command`, default `glow`); Enter opens
+with `editor.command` and `docs.open`, defaulting to a right-side pane.
+
+All fzf views support Ctrl-R refresh, Alt-7 links, and Alt-8 docs. Ctrl-Y in
+links, bookmarks, docs, and directory status copies the target/path and exits
+without running the opener. Docs is appended to the default Tab order.
+
+Picker labels and generated radar/agent previews sanitize active terminal
+controls and retain passive styles. Preview paths with control characters are
+rejected without altering the target. `{}` preview placeholders are passed as
+shell arguments; single-quoted placeholders are invalid configuration.
+
+Config and discovered bookmark/Makefile reads are capped at 1 MiB; oversized
+config fails and oversized discovered files are skipped. Non-regular files
+are never read. Task metadata reads at most 64 KiB. Markdown enumeration stops
+with an explicit error above 10,000 files per root. Ignored task directories
+are pruned before scanning, and overlapping bookmark roots read each file once.
+
+The flat Agents preview revalidates the selected session/window/pane/PID tuple
+before and after capture. Its capture is limited to 256 KiB and the preview has
+a 900 ms deadline. Invalidated captures are discarded. Radar stdout limits
+apply to actual subprocess pipes; overflow terminates the reporter. Descendant
+processes are cleaned up on completion/cancellation, and pipe draining is
+bounded. Failed reporters retain Enter dispatch to their live session.
 
 ## Status Mode
 
@@ -457,7 +494,7 @@ sections = ["sessions", "panes"]
 [picker]
 show_help = false
 preview_width = "60%"
-tab_order = ["palette", "agents", "tools", "projects", "status", "bookmarks"]
+tab_order = ["palette", "agents", "tools", "projects", "status", "bookmarks", "docs"]
 
 [session]
 color = "cyan"
@@ -586,3 +623,7 @@ category = "Search"
 mode = "popup"
 cmd = "rg -n {query} {origin}"
 ```
+
+Child-first hook events keep the unobserved parent state `unknown`. Older
+child-only records with an empty parent state are normalized on read without
+rewriting history; all newly persisted hook records are validated.

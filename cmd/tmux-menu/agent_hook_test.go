@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"tmux-menu/internal/agentstatus"
+	"tmux-menu/internal/tmux"
 )
 
 func TestAgentHookBoundaryOutsideTmuxIsFailOpen(t *testing.T) {
@@ -224,6 +225,30 @@ func TestFindAgentHookProviderAncestorIsPaneBoundAndCycleSafe(t *testing.T) {
 				t.Fatalf("ancestor = %d, %v; want none", got, ok)
 			}
 		})
+	}
+}
+
+func TestAgentHookProcessInventoryReadsExecutableNamesWithoutArguments(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ps")
+	script := `#!/bin/sh
+if [ "$2" != "pid=,ppid=,state=,comm=" ]; then
+	exit 23
+fi
+printf '100 1 S /bin/zsh\n200 100 S /Users/alice/.local/bin/claude\n300 200 S /bin/sh\n400 300 R /tmp/tmux-menu\n'
+`
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	out, err := agentHookProcessOutput(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, ok := findAgentHookProviderAncestor(agentstatus.ProviderClaude, 400, 100, parseProcessList(string(out)))
+	if !ok || pid != 200 {
+		t.Fatalf("resolve Claude hook ancestor = %d, %v; want 200", pid, ok)
 	}
 }
 
@@ -471,7 +496,7 @@ func TestAgentPreviewCommandShellQuotesOnlyFixedArguments(t *testing.T) {
 func TestAgentPreviewPrintsFrozenEvidenceThenTrimmedLiveScrollback(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "snapshot.json")
 	if err := writeAgentPreviewSnapshotFile(path, agentPreviewSnapshot{Version: 1, Rows: map[string]agentPreviewData{
-		"%4": {Provider: "claude", ProviderSession: "session-1234567890", State: "attention", Source: "hook", Event: "PermissionRequest", Reason: "permission", Age: "2s", Fresh: true, Children: []string{"worker | working"}},
+		"%4": {SessionID: "$1", WindowID: "@2", PanePID: "400", Provider: "claude", ProviderSession: "session-1234567890", State: "attention", Source: "hook", Event: "PermissionRequest", Reason: "permission", Age: "2s", Fresh: true, Children: []string{"worker | working"}},
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -484,10 +509,15 @@ func TestAgentPreviewPrintsFrozenEvidenceThenTrimmedLiveScrollback(t *testing.T)
 		return []byte("line one\n\nline two\n\n\n"), nil
 	}
 	var out bytes.Buffer
+	oldList := agentPreviewListPanes
+	t.Cleanup(func() { agentPreviewListPanes = oldList })
+	agentPreviewListPanes = func(context.Context) ([]tmux.Pane, error) {
+		return []tmux.Pane{{SessionID: "$1", WindowID: "@2", PaneID: "%4", PanePID: "400"}}, nil
+	}
 	if err := runAgentPreview(context.Background(), path, "%4", &out); err != nil {
 		t.Fatal(err)
 	}
-	got := out.String()
+	got := stripANSI(out.String())
 	if !strings.HasPrefix(got, "Status: claude | attention | fresh | 2s\nEvidence: hook (PermissionRequest)\nSession: session-12345678\n") {
 		t.Fatalf("preview header = %q", got)
 	}

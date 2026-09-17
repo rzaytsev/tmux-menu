@@ -31,12 +31,18 @@ fi
 todo_root=${STATUS_TODO_ROOT:-"$session_root/todo"}
 using_demo=0
 
+# Keep demo files private; a predictable shared path could follow planted links.
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/tmux-menu-status-new.XXXXXX")
+trap 'rm -rf -- "$scratch"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 has_board() {
 	[ -d "$1/new" ] && [ -d "$1/doing" ] && [ -d "$1/done" ]
 }
 
 seed_demo() {
-	demo_root="${TMPDIR:-/tmp}/tmux-menu-status-new-demo"
+	demo_root="$scratch/demo"
 	todo_root="$demo_root/todo"
 	mkdir -p "$todo_root/new" "$todo_root/doing" "$todo_root/done"
 	cat >"$todo_root/new/01-shape-status-board.md" <<-'TASK'
@@ -71,8 +77,14 @@ if ! has_board "$todo_root"; then
 	seed_demo
 fi
 
-rows_file=$(mktemp "${TMPDIR:-/tmp}/tmux-menu-status-new.XXXXXX")
-trap 'rm -f "$rows_file"' EXIT INT TERM
+rows_file="$scratch/rows"
+: >"$rows_file"
+
+# The hidden path field is a line/tab protocol. Never emit ambiguous paths.
+if [ "$(printf '%s' "$todo_root" | LC_ALL=C tr -d '[:cntrl:]')" != "$todo_root" ]; then
+	echo "tmux-menu: task root contains unsupported control characters" >&2
+	exit 1
+fi
 
 esc=$(printf '\033')
 reset="${esc}[0m"
@@ -83,7 +95,7 @@ doing_color="${esc}[33m"
 done_color="${esc}[32m"
 
 clean_one_line() {
-	printf '%s' "$1" | tr '\t\r\n' '   ' | sed 's/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//'
+	printf '%s' "$1" | tr '\t\r\n' '   ' | LC_ALL=C tr -d '[:cntrl:]' | sed 's/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//'
 }
 
 truncate() {
@@ -107,7 +119,7 @@ task_title() {
 
 task_summary() {
 	file=$1
-	summary=$(sed -n 's/^[[:space:]]*[Ss][Uu][Mm][Mm][Aa][Rr][Yy]:[[:space:]]*//p' "$file" | sed -n '1p')
+	summary=$(head -c 65536 "$file" | sed -n 's/^[[:space:]]*[Ss][Uu][Mm][Mm][Aa][Rr][Yy]:[[:space:]]*//p' | sed -n '1p')
 	if [ -z "$summary" ]; then
 		summary="(no summary)"
 	fi
@@ -119,7 +131,7 @@ append_lane() {
 	label=$2
 	color=$3
 	dir="$todo_root/$lane"
-	find "$dir" -type f | sort | while IFS= read -r file; do
+	find "$dir" -name '*[[:cntrl:]]*' -prune -o -type f -print | sort | while IFS= read -r file; do
 		case "$(basename "$file")" in
 			.gitkeep) continue ;;
 		esac
@@ -143,7 +155,8 @@ if [ "$using_demo" -eq 1 ]; then
 	echo "tmux-menu: no todo/new|doing|done under $session_root; using demo at $todo_root" >&2
 fi
 
-script_path=$0
+TMUX_MENU_STATUS_MOCK_SCRIPT=$0
+export TMUX_MENU_STATUS_MOCK_SCRIPT
 selection=$(
 	fzf \
 		--ansi \
@@ -153,7 +166,7 @@ selection=$(
 		--delimiter='	' \
 		--with-nth=2 \
 		--header='NEW / DOING / DONE | Space preview | Enter edit | Ctrl-C cancel' \
-		--preview="sh $script_path --preview {1}" \
+		--preview='sh "$TMUX_MENU_STATUS_MOCK_SCRIPT" --preview {1}' \
 		--preview-window='right:60%:hidden:wrap' \
 		--bind='space:toggle-preview' \
 		<"$rows_file" || true

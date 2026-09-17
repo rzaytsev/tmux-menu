@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"tmux-menu/internal/config"
+	"tmux-menu/internal/fileutil"
 	linkscan "tmux-menu/internal/links"
 	"tmux-menu/internal/picker"
 )
@@ -33,7 +35,7 @@ func selectStatus(ctx context.Context) (picker.Result[menuItem], error) {
 	if err != nil {
 		return picker.Result[menuItem]{}, err
 	}
-	return picker.SelectWithExpectAndPreviewOptions(ctx, "status> ", items, viewSwitchKeys, statusFooter(cfg), cfg.Status.PreviewCommand, picker.Options{
+	return picker.SelectWithExpectAndPreviewOptions(ctx, "status> ", items, filePickerKeys(), statusFooter(cfg), cfg.Status.PreviewCommand, picker.Options{
 		PreviewWindow: pickerPreviewWindow(cfg.Picker.PreviewWidth, "hidden", "wrap"),
 		Bindings:      []string{"space:toggle-preview"},
 	})
@@ -52,7 +54,7 @@ func statusFooter(cfg config.Config) string {
 	if footer != "" {
 		footer += " | "
 	}
-	footer += "Space preview | Enter edit | Ctrl-C cancel"
+	footer += "Space preview | Enter edit | Ctrl-Y copy path | Ctrl-C cancel"
 	footer += "\n" + viewSwitchFooter()
 	return footer
 }
@@ -72,7 +74,7 @@ func statusItems(cfg config.StatusConfig, editor config.EditorConfig, sessionRoo
 		items = append(items, picker.Item[menuItem]{
 			Label:   statusLabel(file),
 			Preview: file.Path,
-			Value:   menuItem{dispatch: fileOpenDispatch(linkscan.Item{Kind: linkscan.KindFile, Target: file.Path}, sessionRoot, editor, cfg.Open)},
+			Value:   menuItem{dispatch: fileOpenDispatch(linkscan.Item{Kind: linkscan.KindFile, Target: file.Path}, sessionRoot, editor, cfg.Open), copyTarget: file.Path},
 		})
 	}
 	return items, nil
@@ -126,6 +128,13 @@ func listStatusLaneFiles(root string, statusRoot string, status string, ignorePa
 			return err
 		}
 		if entry.IsDir() {
+			rel, err := filepath.Rel(root, path)
+			if err != nil {
+				return err
+			}
+			if path != statusRoot && statusFileIgnored(rel, ignorePatterns) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		info, err := entry.Info()
@@ -201,10 +210,10 @@ func statusLabel(file statusFile) string {
 func statusTaskMeta(path string) (string, string) {
 	title := statusTitleFromPath(path)
 	summary := ""
-	file, err := os.Open(path)
+	file, err := fileutil.OpenRegular(path)
 	if err == nil {
 		defer file.Close()
-		scanner := bufio.NewScanner(file)
+		scanner := bufio.NewScanner(io.LimitReader(file, 64<<10))
 		for scanner.Scan() {
 			line := strings.TrimSpace(scanner.Text())
 			if summary == "" {
@@ -235,13 +244,7 @@ func cleanStatusText(text string) string {
 }
 
 func truncateStatusText(text string, max int) string {
-	if len(text) <= max {
-		return text
-	}
-	if max <= 3 {
-		return text[:max]
-	}
-	return text[:max-3] + "..."
+	return truncate(text, max)
 }
 
 func colorStatusBadge(status string) string {

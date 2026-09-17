@@ -8,6 +8,9 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"tmux-menu/internal/displaytext"
+	"tmux-menu/internal/shellquote"
 )
 
 type Item[T any] struct {
@@ -58,25 +61,28 @@ func SelectWithExpectAndPreviewOptions[T any](ctx context.Context, prompt string
 	if len(items) == 0 && len(expectKeys) == 0 {
 		return Result[T]{}, ErrCanceled
 	}
-	lines := make([]string, 0, len(items))
+	var input strings.Builder
 	hasPreview := strings.TrimSpace(previewCommand) != ""
 	if len(items) == 0 {
 		if hasPreview {
-			lines = append(lines, fmt.Sprintf("%d\t\tNo items", emptyItemID))
+			fmt.Fprintf(&input, "%d\t\tNo items\n", emptyItemID)
 		} else {
-			lines = append(lines, fmt.Sprintf("%d\tNo items", emptyItemID))
+			fmt.Fprintf(&input, "%d\tNo items\n", emptyItemID)
 		}
 	}
 	for i, item := range items {
 		if hasPreview {
-			lines = append(lines, fmt.Sprintf("%d\t%s\t%s", i, item.Preview, item.Label))
+			if strings.ContainsFunc(item.Preview, displaytext.UnsafeControl) {
+				return Result[T]{}, fmt.Errorf("item %d preview contains unsupported control characters", i)
+			}
+			fmt.Fprintf(&input, "%d\t%s\t%s\n", i, item.Preview, displaytext.Line(item.Label))
 			continue
 		}
-		lines = append(lines, fmt.Sprintf("%d\t%s", i, item.Label))
+		fmt.Fprintf(&input, "%d\t%s\n", i, displaytext.Line(item.Label))
 	}
 	args := buildFZFArgs(prompt, expectKeys, footer, previewCommand, options)
 	cmd := exec.CommandContext(ctx, "fzf", args...)
-	cmd.Stdin = strings.NewReader(strings.Join(lines, "\n"))
+	cmd.Stdin = strings.NewReader(input.String())
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -123,7 +129,7 @@ func buildFZFArgs(prompt string, expectKeys []string, footer string, previewComm
 		args = append(args, "--footer", footer)
 	}
 	if hasPreview {
-		args = append(args, "--preview", previewCommandForField(previewCommand, "{2}"))
+		args = append(args, "--preview", previewCommandForField(previewCommand, "{s2}"))
 	}
 	if options.PreviewWindow != "" {
 		args = append(args, "--preview-window", options.PreviewWindow)
@@ -143,7 +149,10 @@ func buildFZFArgs(prompt string, expectKeys []string, footer string, previewComm
 func previewCommandForField(command string, field string) string {
 	command = strings.TrimSpace(command)
 	if strings.Contains(command, "{}") {
-		return strings.ReplaceAll(command, "{}", field)
+		// fzf quotes field values itself. Keep them outside the configured shell
+		// template so a quoted placeholder cannot turn a filename into shell code.
+		script := "set -f; IFS=; " + strings.ReplaceAll(command, "{}", "$1")
+		return "sh -c " + shellquote.Quote(script) + " tmux-menu " + field
 	}
 	return command + " " + field
 }
@@ -165,6 +174,9 @@ func parseFZFOutput[T any](out string, items []Item[T], expect bool) (Result[T],
 			return Result[T]{}, ErrCanceled
 		}
 		line = lines[1]
+	}
+	if strings.ContainsAny(line, "\n\r\x00") {
+		return Result[T]{}, fmt.Errorf("bad fzf output: multiple or malformed records")
 	}
 	idText, _, ok := strings.Cut(line, "\t")
 	if !ok {
