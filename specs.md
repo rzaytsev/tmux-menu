@@ -6,8 +6,7 @@ Build a small Go tool for tmux users who keep several project sessions open.
 The tool has seven user-facing views:
 
 1. `palette`: fuzzy-select tmux sessions and panes.
-2. `agents`: continuously monitor live agent panes and delegate fuzzy switching
-   to the existing Agents picker.
+2. `agents`: fuzzy-select live agent panes with status and a terminal preview.
 3. `tools`: fuzzy-select configured commands and quick dirs.
 4. `links`: fuzzy-select file and URL references from the active pane scrollback.
 5. `bookmarks`: fuzzy-select Markdown links from project notes and project files.
@@ -17,7 +16,6 @@ The tool has seven user-facing views:
 The first implementation favors low complexity over custom UI polish. It uses:
 
 - Go for tmux discovery, config parsing, dispatch, and safety.
-- Bubble Tea for the persistent multi-pane Agent HUD.
 - `fzf` for fuzzy selection inside tmux picker popups.
 - `tmux display-popup` as the launcher surface.
 
@@ -47,17 +45,6 @@ tmux-menu agent-hook snippets [codex|claude] [ingest|trace]
 tmux-menu sample-config
 ```
 
-Inside the Agent HUD:
-
-- arrows or `h`, `j`, `k`, `l`: move selection
-- `[` / `]`: previous/next page
-- `n`: next attention item across pages
-- `z`: toggle focus
-- `?`: toggle full help
-- `/`: delegated existing fzf Agents picker
-- `Enter`: exact live-pane switch
-- `q`: quit
-
 Inside `fzf` picker views:
 
 - `Tab`: next configured view.
@@ -76,7 +63,7 @@ Inside `fzf` picker views:
 In the links view, `Alt-Enter` opens the selected row with the configured
 secondary opener.
 
-The shortcuts are shown in a persistent footer at the bottom of every picker.
+The navigation footer is hidden; navigation bindings remain active.
 `picker.tab_order` controls the Tab cycle and defaults to palette, agents,
 tools, projects, status, bookmarks, then docs. Configured values may also include
 links. Cycling wraps at both ends; a view omitted from the order enters at the
@@ -179,89 +166,89 @@ The picker uses ANSI colors through `fzf --ansi`:
   green working, bright-cyan completed, yellow waiting, red attention, and dim unknown/workdir
 - metadata: dim
 
-Bubble Tea is used only for the Agent HUD because its persistent live grid,
-focus mode, cross-page attention, resize handling, and automatic refresh cannot
-be expressed safely as an fzf picker. All fuzzy selection and ordinary popup
-view switching remain on `fzf --ansi` and `fzf --expect`.
+All views use `fzf --ansi`; popup view switching uses `fzf --expect`.
 
 ## Agents Mode
 
-`agents` opens the adaptive Agent HUD. `agents --picker` bypasses it and opens
-the existing fzf Agents picker. The popup forms accept the same optional flag.
-Entering Agents from palette Tab/Alt-2 relaunches the top-level HUD even when
-the old and new popup widths are identical.
+`agents` and `agents --picker` open the same fzf Agents picker. The popup forms
+accept the same optional compatibility flag. The dashboard is removed. Tab and
+Alt-2 enter this picker, relaunching the popup only when its width changes.
 
 Only currently live tmux panes matched by command/title, descendant process, or
 fresh exact hook evidence appear. Stored evidence may annotate a live matching
 pane but never creates a row. One shared semantic inventory owns pane identity,
 provider, normalized status, source, freshness, child rollup, and trusted timing
-anchors for the HUD, picker, and metadata-only `agent-hook snapshot`.
+anchors for the picker and metadata-only `agent-hook snapshot`.
+Snapshot v1 adds server fingerprint, session/window IDs, pane PID and optional
+provider session ID. Consumers must not join conversations by pane ID alone.
+Export reads are bounded to two seconds and never reconcile hook records.
 
-The overview shows up to four stable cells and pages additional agents. Status
-changes update a cell in place; they do not reorder slots. Narrow layouts reduce
-columns and rows until one selected terminal remains. Focus mode dedicates most
-of the body to that terminal. The header summarizes every page by the five
-non-color-only statuses: `attention`, `working`, `completed`, `waiting`, and
-`unknown`. Empty inventory remains open and continues discovery.
+Rows show the configured provider/status icons, session, thread, and workdir.
+They sort by attention, working, completed, waiting, and unknown, with recent
+hook evidence first within a status. `Ctrl-R` rebuilds the inventory and retains
+the selected stable pane ID when it still exists. The list reserves 15 result
+rows when space allows; smaller terminals keep at least five preview content
+rows. List discovery, ordering, icons, and acknowledgement tokens refresh manually.
+Typing filters the list; Enter switches and Esc exits. `Ctrl-X` acknowledges only
+the selected exact completion token and never approves agent input.
 
-Each cell contains provider, status, session, thread, workdir when space allows,
-optional trustworthy telemetry, and a bounded terminal tail. The clocks are:
+The preview snapshot freezes the rendered pane identity. The fzf
+`every(2):refresh-preview` binding refreshes only the selected pane's status,
+evidence, and scrollback every two seconds, preserving the query and selection.
+This requires fzf 0.73.0 or newer. Preview metadata reads are bounded and use
+read-only hook lookup; polling cannot renew leases or reconcile hook records.
+One colored line stays pinned above scrollback: provider, status, freshness,
+available hook age, then status evidence. Provider and state use configured
+agent colors; source is cyan, freshness/age/separators dim, and stale or expired
+evidence yellow. Hook reason takes precedence over its raw event name. The
+header truncates to the preview column width without wrapping; the preview
+scroll counter is hidden to prevent overlap. Evidence names
+the hook reason (or event when no reason exists), terminal title, process
+fallback, or unknown. When a working/waiting hook lease expires, retain its
+reason and event age only for an independently detected live agent with matching identity; label
+it `hook expired` beside the active fallback. Expired evidence never creates a
+row, supplies current clocks, renews a lease, or overrides fallback status.
+Session-end and acknowledged completion records are not shown as expired leases.
 
-- `turn`: elapsed time since the trusted current turn started
-- `state`: time since the normalized state actually changed
-- `event`: age since the last trusted provider event
+Preview capture has one 900 ms deadline and a 256 KiB output limit, requests the
+last 300 lines, and validates the exact live session/window/pane/pane-PID tuple
+both before and after capture. A changed or unavailable identity shows a refresh
+message instead of terminal output. Captured content and metadata are sanitized;
+only printable text and passive allowlisted SGR may reach fzf. Terminal content
+is never written to hook state, trace, snapshot JSON, or a transcript store.
 
-Fallback-only and legacy rows omit unavailable clocks. Child count is shown
-only from fresh metadata. V1 does not infer token cost, context utilization,
-task percentage, tool counts, or changed-file ownership.
-
-Refresh generations are serial and observational. A measured disposable tmux
-socket baseline completed inventory and styled capture below the timer's 0.01s
-resolution; v1 therefore uses a conservative 900 ms generation deadline and
-schedules the next refresh about one second after completion. A generation
-captures only the current page (maximum four panes) or the focused pane, with
-200 lines and 256 KiB per pane, a 13 MiB shared output budget (4 MiB pane
-inventory + 4 MiB process inventory + 4 MiB post-capture identity validation +
-4*256 KiB captures), and a 256 KiB retained terminal budget. Hook and config
-file reads are regular-file bounded and charged to the same budget. Hidden
-pages retain no terminal content. Capture failure preserves the last safe
-terminal with a stale marker; inventory failure marks the generation stale;
-pane exit or incarnation change removes the row and its tail on the next
-successful inventory refresh. A post-capture pane-ID/PID check rejects output
-from an identity reused during capture. Polling never renews hook leases,
-deletes hook state, or changes agent lifecycle state.
-
-All pane output, labels, errors, and configured display values are untrusted.
-Before model state, tmux-menu bounds and sanitizes them into printable spans with
-only passive allowlisted SGR styling. OSC clipboard/title/hyperlink operations,
-DCS/APC and tmux passthrough, non-SGR CSI, cursor/screen controls, C0/C1 and bidi
-controls, malformed sequences, and invalid UTF-8 cannot survive as active
-controls. Renderer-owned resets terminate every line and cell. Terminal output
-is retained only in bounded HUD memory and is never written to hook state,
-trace, snapshot JSON, or a transcript store.
-
-`/` suspends the HUD and runs the existing fzf picker. Cancel resumes the same
-selection, page, and focus if its pane remains live; direct picker cancel exits.
-The delegated picker retains `Ctrl-R`, `Ctrl-X`, fuzzy selection, and view
-switches. HUD-native keys cannot send keys, approve input, acknowledge
-completion, ingest hooks, or otherwise mutate an agent.
-
-Enter and picker selection carry stable session, window, pane, pane PID, and
-provider PID metadata internally. Immediately before tmux mutation, dispatch
-lists live panes and requires exactly one canonical session/window/pane/pane-PID
-tuple. Malformed, moved, reused, vanished, or unavailable inventory fails closed
-without label or index fallback.
+Selection carries stable session, window, pane, pane PID, and provider PID
+metadata internally. Immediately before tmux mutation, dispatch lists live panes
+and requires exactly one canonical session/window/pane/pane-PID tuple. Malformed,
+moved, reused, vanished, or unavailable inventory fails closed without label or
+index fallback.
 
 Codex titles still map `Action Required` to attention, `Working`/`Thinking` and
 spinner markers to working, and `Ready`/empty spinner markers to waiting. Claude
 idle markers map to waiting, animated markers to working, and explicit
 needs-input/permission to attention. Fresh identity-bound hook state can add
-completed and authoritative attention/working/waiting; other agents use process
-working/waiting/unknown fallback. The direct fzf picker preserves the configured
+completed and authoritative attention/working/waiting. Codex's live idle title
+(`Ready` or an empty spinner marker) takes precedence over a parent working
+hook lease, unless fresh working child evidence keeps the aggregate active.
+This uses terminal-title evidence without stale working clocks and does not
+modify hook records, completed acknowledgements, or attention behavior.
+Other agents use process working/waiting/unknown fallback. The fzf picker preserves the configured
 icons/colors, compact labels, exact completion acknowledgement, and live
 selected-pane preview.
 
+Claude `Notification` hooks match `permission_prompt|elicitation_dialog`.
+`elicitation_dialog` becomes confirmed `attention` with reason `elicitation-dialog`;
+unrelated notifications remain observational. Existing correlation checks still
+apply: a notification with no correlation ID is not resolved by unrelated tool
+progress, while a new user turn or a response stop advances lifecycle state.
+
 ## Tools Mode
+
+`tools <name>` runs one configured command by its exact, case-sensitive `title`
+without opening fzf. It uses the normal config layers, current session filter,
+and command dispatch settings. Missing or multiple eligible matches fail without
+dispatch. Only `commands` entries are eligible; Makefile targets and quick dirs
+are excluded. `tools` without a name retains the picker.
 
 `tools` combines configured sources plus local Makefile targets:
 

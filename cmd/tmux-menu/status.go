@@ -55,7 +55,6 @@ func statusFooter(cfg config.Config) string {
 		footer += " | "
 	}
 	footer += "Space preview | Enter edit | Ctrl-Y copy path | Ctrl-C cancel"
-	footer += "\n" + viewSwitchFooter()
 	return footer
 }
 

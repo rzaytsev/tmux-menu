@@ -23,7 +23,7 @@ func selectDocs(ctx context.Context) (picker.Result[menuItem], error) {
 	if err != nil {
 		return picker.Result[menuItem]{}, err
 	}
-	return picker.SelectWithExpectAndPreviewOptions(ctx, "docs> ", items, filePickerKeys(), "Enter edit  Ctrl-Y copy path\nSpace preview\n"+viewSwitchFooter(), cfg.Docs.PreviewCommand, picker.Options{
+	return picker.SelectWithExpectAndPreviewOptions(ctx, "docs> ", items, filePickerKeys(), "Enter edit  Ctrl-Y copy path\nSpace preview", cfg.Docs.PreviewCommand, picker.Options{
 		PreviewWindow: pickerPreviewWindow(cfg.Picker.PreviewWidth, "hidden", "wrap"),
 		Bindings:      []string{"space:toggle-preview"},
 	})

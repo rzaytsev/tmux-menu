@@ -487,11 +487,14 @@ func resolve(current record, now time.Time, policy Policy) Annotation {
 	turnStartedAt := current.TurnStartedAt
 	stateChangedAt := current.StateChangedAt
 	lastEventAt := current.LastEventAt
+	leaseExpired := false
 	if state == StateWorking && (current.WorkingUntil.IsZero() || !now.Before(current.WorkingUntil)) {
 		state, fresh = StateUnknown, false
+		leaseExpired = !current.WorkingUntil.IsZero()
 	}
 	if state == StateWaiting && (current.RawEvent == "SessionEnd" || current.WorkingUntil.IsZero() || !now.Before(current.WorkingUntil)) {
 		state, fresh = StateUnknown, false
+		leaseExpired = current.RawEvent != "SessionEnd" && !current.WorkingUntil.IsZero()
 	}
 	children := make([]ChildAnnotation, 0, len(current.Children))
 	for _, child := range current.Children {
@@ -502,6 +505,14 @@ func resolve(current record, now time.Time, policy Policy) Annotation {
 		childFresh := true
 		if childState == StateWorking && (child.WorkingUntil.IsZero() || !now.Before(child.WorkingUntil)) {
 			childState, childFresh = StateUnknown, false
+			if !fresh && !child.WorkingUntil.IsZero() && (!leaseExpired || child.UpdatedAt.After(updatedAt)) {
+				// A child may have supplied the previous working status. Keep its
+				// expired evidence too, without turning it into a live claim.
+				leaseExpired = true
+				reason, rawEvent = child.Reason, child.RawEvent
+				updatedAt, lastEventAt = child.UpdatedAt, child.LastEventAt
+				turnStartedAt, stateChangedAt = child.TurnStartedAt, child.StateChangedAt
+			}
 		}
 		children = append(children, ChildAnnotation{
 			ID: child.ID, Type: child.Type, State: childState, Reason: child.Reason, RawEvent: child.RawEvent,
@@ -518,6 +529,7 @@ func resolve(current record, now time.Time, policy Policy) Annotation {
 	for _, child := range children {
 		if child.Fresh && rankState(child.State) < rankState(state) {
 			state, fresh = child.State, true
+			leaseExpired = false
 			reason = child.Reason
 			rawEvent = child.RawEvent
 			updatedAt = child.UpdatedAt
@@ -530,7 +542,7 @@ func resolve(current record, now time.Time, policy Policy) Annotation {
 		Provider: current.Provider, ProviderSessionID: current.ProviderSessionID, TurnID: current.TurnID,
 		Pane: current.Pane, State: state, Reason: reason, Source: "hook", RawEvent: rawEvent, UpdatedAt: updatedAt,
 		TurnStartedAt: turnStartedAt, StateChangedAt: stateChangedAt, LastEventAt: lastEventAt,
-		Fresh: fresh, Children: children,
+		Fresh: fresh, LeaseExpired: leaseExpired, Children: children,
 	}
 	if state == StateCompleted {
 		annotation.AcknowledgeToken = acknowledgementToken(current)

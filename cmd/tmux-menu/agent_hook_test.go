@@ -9,8 +9,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/charmbracelet/x/ansi"
 	"tmux-menu/internal/agentstatus"
+	"tmux-menu/internal/config"
 	"tmux-menu/internal/tmux"
 )
 
@@ -384,7 +387,7 @@ func TestHookSnippetClaudeUsesPromptAndSubagentEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := out.String()
-	for _, want := range []string{`"UserPromptSubmit"`, `"Notification"`, `"matcher": "permission_prompt"`, `"PostToolUseFailure"`, `"PostToolBatch"`, `"PermissionDenied"`, `"StopFailure"`, `"SubagentStart"`, `agent-hook ingest claude`, `~/.claude/settings.json`} {
+	for _, want := range []string{`"UserPromptSubmit"`, `"Notification"`, `"matcher": "permission_prompt|elicitation_dialog"`, `"PostToolUseFailure"`, `"PostToolBatch"`, `"PermissionDenied"`, `"StopFailure"`, `"SubagentStart"`, `agent-hook ingest claude`, `~/.claude/settings.json`} {
 		if !strings.Contains(got, want) {
 			t.Errorf("snippet missing %q", want)
 		}
@@ -458,7 +461,7 @@ func TestAgentPreviewSnapshotIsPrivateBoundedAndImmutable(t *testing.T) {
 	}
 	path, cleanup, err := writeAgentPreviewSnapshot(map[string]agentPreviewData{
 		"%9": {Provider: "codex", State: "working", Source: "hook", Fresh: true, Children: children},
-	})
+	}, config.Default().Agents.Colors)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -493,10 +496,10 @@ func TestAgentPreviewCommandShellQuotesOnlyFixedArguments(t *testing.T) {
 	}
 }
 
-func TestAgentPreviewPrintsFrozenEvidenceThenTrimmedLiveScrollback(t *testing.T) {
+func TestAgentPreviewRefreshesEvidenceThenPrintsTrimmedLiveScrollback(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "snapshot.json")
 	if err := writeAgentPreviewSnapshotFile(path, agentPreviewSnapshot{Version: 1, Rows: map[string]agentPreviewData{
-		"%4": {SessionID: "$1", WindowID: "@2", PanePID: "400", Provider: "claude", ProviderSession: "session-1234567890", State: "attention", Source: "hook", Event: "PermissionRequest", Reason: "permission", Age: "2s", Fresh: true, Children: []string{"worker | working"}},
+		"%4": {SessionID: "$1", WindowID: "@2", PanePID: "400", Provider: "claude", State: "working", Source: "terminal-title"},
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -510,7 +513,23 @@ func TestAgentPreviewPrintsFrozenEvidenceThenTrimmedLiveScrollback(t *testing.T)
 	}
 	var out bytes.Buffer
 	oldList := agentPreviewListPanes
-	t.Cleanup(func() { agentPreviewListPanes = oldList })
+	oldLoad := agentPreviewLoadRow
+	t.Cleanup(func() { agentPreviewListPanes, agentPreviewLoadRow = oldList, oldLoad })
+	refreshes := 0
+	agentPreviewLoadRow = func(ctx context.Context, pane tmux.Pane) agentPreviewData {
+		refreshes++
+		if pane.PaneID != "%4" || pane.PanePID != "400" {
+			t.Fatalf("refreshed wrong pane: %+v", pane)
+		}
+		if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > 900*time.Millisecond {
+			t.Fatal("preview refresh needs a bounded deadline")
+		}
+		state := "attention"
+		if refreshes > 1 {
+			state = "completed"
+		}
+		return agentPreviewData{Provider: "claude", ProviderSession: "session-1234567890", State: state, Source: "hook", Event: "PermissionRequest", Reason: "permission", Age: "2s", Fresh: true, Children: []string{"worker | working"}}
+	}
 	agentPreviewListPanes = func(context.Context) ([]tmux.Pane, error) {
 		return []tmux.Pane{{SessionID: "$1", WindowID: "@2", PaneID: "%4", PanePID: "400"}}, nil
 	}
@@ -518,11 +537,22 @@ func TestAgentPreviewPrintsFrozenEvidenceThenTrimmedLiveScrollback(t *testing.T)
 		t.Fatal(err)
 	}
 	got := stripANSI(out.String())
-	if !strings.HasPrefix(got, "Status: claude | attention | fresh | 2s\nEvidence: hook (PermissionRequest)\nSession: session-12345678\n") {
+	if !strings.HasPrefix(got, "claude · attention · fresh · 2s · hook: permission\nSession: session-12345678\n") {
 		t.Fatalf("preview header = %q", got)
 	}
 	if !strings.Contains(got, "Child: worker | working\n\nline one\n\nline two\n") || strings.HasSuffix(got, "\n\n") {
 		t.Fatalf("preview output not trimmed as expected: %q", got)
+	}
+	out.Reset()
+	if err := runAgentPreview(t.Context(), path, "%4", &out); err != nil {
+		t.Fatal(err)
+	}
+	if refreshes != 2 || !strings.Contains(stripANSI(out.String()), "claude · completed") {
+		t.Fatalf("second preview did not reload metadata: %q", out.String())
+	}
+	frozen, err := readAgentPreviewSnapshot(path)
+	if err != nil || frozen.Rows["%4"].State != "working" {
+		t.Fatalf("refresh mutated picker snapshot: %+v, %v", frozen, err)
 	}
 }
 
@@ -530,10 +560,74 @@ func TestAgentPreviewSanitizesFrozenTerminalMetadata(t *testing.T) {
 	var out bytes.Buffer
 	printAgentPreviewHeader(&out, agentPreviewData{
 		Provider: "codex\x1b[31m", State: "working\nforged", Source: "hook\rline", Reason: "safe\x00reason", Fresh: true,
-	})
-	got := out.String()
+		ExpiredHookReason: "tool\x1b[31m", ExpiredHookAge: "3m\rago",
+	}, config.Default().Agents.Colors)
+	got := stripANSI(out.String())
 	if strings.ContainsAny(got, "\x1b\r\x00") || strings.Contains(got, "working\nforged") {
 		t.Fatalf("preview metadata retained terminal controls: %q", got)
+	}
+}
+
+func TestAgentPreviewPinsSourceAndHistoricalEvidenceInOneHeaderLine(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		row  agentPreviewData
+		want string
+	}{
+		{"expired", agentPreviewData{Source: "terminal-title", ExpiredHookReason: "user-prompt", ExpiredHookAge: "3m ago"}, "terminal title · hook expired: user-prompt (3m ago)"},
+		{"process", agentPreviewData{Source: "process"}, "process fallback"},
+		{"unknown", agentPreviewData{}, "unknown"},
+		{"elicitation", agentPreviewData{Source: "hook", Event: "Notification", Reason: "elicitation-dialog"}, "hook: elicitation-dialog"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			printAgentPreviewHeader(&out, tc.row, config.Default().Agents.Colors)
+			lines := strings.Split(strings.TrimSuffix(stripANSI(out.String()), "\n"), "\n")
+			if len(lines) != 1 || !strings.HasSuffix(lines[0], tc.want) {
+				t.Fatalf("fixed preview header = %q, want suffix %q", out.String(), tc.want)
+			}
+		})
+	}
+}
+
+func TestAgentPreviewHeaderColorsAndSingleLineWidth(t *testing.T) {
+	colors := config.Default().Agents.Colors
+	colors.Claude = "bright_magenta"
+	for _, tc := range []struct {
+		state string
+		color string
+	}{
+		{"working", ansiGreen},
+		{"attention", ansiRed},
+		{"completed", ansiBrightCyan},
+		{"waiting", ansiYellow},
+	} {
+		t.Run(tc.state, func(t *testing.T) {
+			var out bytes.Buffer
+			printAgentPreviewHeader(&out, agentPreviewData{
+				Provider: "claude", State: tc.state, Fresh: true, Age: "6s ago",
+				Source: "hook", Event: "PostToolBatch", Reason: "tool-batch-finished",
+			}, colors)
+			got := out.String()
+			for _, want := range []string{ansiBrightMagenta + "claude", tc.color + tc.state, ansiCyan + "hook", ansiDim + "6s ago"} {
+				if !strings.Contains(got, want) {
+					t.Fatalf("colored header missing %q: %q", want, got)
+				}
+			}
+			if plain := stripANSI(got); plain != "claude · "+tc.state+" · fresh · 6s ago · hook: tool-batch-finished\n" {
+				t.Fatalf("header repeats raw event or occupies multiple lines: %q", plain)
+			}
+		})
+	}
+	t.Setenv("FZF_PREVIEW_COLUMNS", "56")
+	var out bytes.Buffer
+	printAgentPreviewHeader(&out, agentPreviewData{
+		Provider: "claude", State: "working", Fresh: true, Source: "hook",
+		Reason: strings.Repeat("界", 80),
+	}, colors)
+	line := strings.TrimSuffix(out.String(), "\n")
+	if ansi.StringWidth(line) > 56 || !strings.HasSuffix(stripANSI(line), "…") || !strings.HasSuffix(line, ansiReset) {
+		t.Fatalf("narrow header must truncate by cells and reset its style: %q", line)
 	}
 }
 

@@ -14,13 +14,45 @@ import (
 	"tmux-menu/internal/shellquote"
 )
 
+func runToolsCommand(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return runPickerLoop(ctx, "tools")
+	}
+	if len(args) != 1 || strings.TrimSpace(args[0]) == "" {
+		return fmt.Errorf("usage: tmux-menu tools [name]")
+	}
+	cfg, rt, err := loadConfig(ctx)
+	if err != nil {
+		return err
+	}
+	var command *config.Command
+	for i := range cfg.Commands {
+		c := &cfg.Commands[i]
+		if c.Title != args[0] || !commandMatchesSession(*c, rt.SessionName) {
+			continue
+		}
+		if command != nil {
+			return fmt.Errorf("multiple configured commands named %q match session %q", args[0], rt.SessionName)
+		}
+		command = c
+	}
+	if command == nil {
+		return fmt.Errorf("no configured command named %q matches session %q", args[0], rt.SessionName)
+	}
+	d := action.FromCommand(*command, cfg.Popup, rt.OriginPath)
+	if path := os.Getenv("TMUX_MENU_DISPATCH_FILE"); path != "" {
+		return action.Write(path, d)
+	}
+	return action.Execute(ctx, d, rt.OriginPane)
+}
+
 func selectTools(ctx context.Context) (picker.Result[menuItem], error) {
 	cfg, rt, err := loadConfig(ctx)
 	if err != nil {
 		return picker.Result[menuItem]{}, err
 	}
 	items := toolsItems(cfg, rt.OriginPath, rt.SessionName, rt.SessionPath)
-	return picker.SelectWithExpect(ctx, "tools> ", items, viewSwitchKeys, viewSwitchFooter())
+	return picker.SelectWithExpect(ctx, "tools> ", items, viewSwitchKeys, "")
 }
 
 func toolsItems(cfg config.Config, originPath, sessionName, sessionPath string) []picker.Item[menuItem] {

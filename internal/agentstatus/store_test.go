@@ -97,6 +97,91 @@ func TestSnapshotReadOnlyDoesNotReconcileMismatchedRecords(t *testing.T) {
 	}
 }
 
+func TestSnapshotsRetainExpiredHookEvidenceWithoutRenewingLease(t *testing.T) {
+	store := newCoreTestStore(t, testPolicy())
+	now := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
+	event := coreEvent(EventTurnStart, "turn-1", now)
+	event.Reason = "user-prompt"
+	applyCore(t, store, event)
+	path := store.recordPath(recordKey(event.Pane, event.Provider))
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := []LivePane{{Pane: event.Pane, Provider: event.Provider}}
+	for _, readOnly := range []bool{false, true} {
+		var annotations []Annotation
+		var problems []error
+		at := now.Add(testPolicy().WorkingTTL + time.Second)
+		if readOnly {
+			annotations, problems = store.SnapshotReadOnly(t.Context(), live, at, nil)
+		} else {
+			annotations, problems = store.Snapshot(t.Context(), live, at)
+		}
+		if len(problems) != 0 || len(annotations) != 1 {
+			t.Fatalf("expired evidence missing: %+v, %v", annotations, problems)
+		}
+		got := annotations[0]
+		if got.Fresh || !got.LeaseExpired || got.State != StateUnknown || got.Reason != event.Reason || !got.LastEventAt.Equal(now) {
+			t.Fatalf("expired evidence became authoritative or lost its cause: %+v", got)
+		}
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || string(before) != string(after) {
+		t.Fatalf("observation changed persisted state: %v", err)
+	}
+}
+
+func TestExpiredEvidenceDoesNotDisplaceAnotherProvidersFreshAnnotation(t *testing.T) {
+	for _, expiredProvider := range []Provider{ProviderClaude, ProviderCodex} {
+		store := newCoreTestStore(t, testPolicy())
+		now := time.Now()
+		completed := coreEvent(EventTurnStop, "completed", now)
+		if expiredProvider == ProviderClaude {
+			completed.Provider = ProviderCodex
+		}
+		applyCore(t, store, completed)
+		working := coreEvent(EventTurnStart, "expired", now.Add(time.Second))
+		working.Provider = expiredProvider
+		applyCore(t, store, working)
+		for _, readOnly := range []bool{false, true} {
+			var annotations []Annotation
+			var problems []error
+			live := []LivePane{{Pane: coreTestPane()}}
+			at := now.Add(testPolicy().WorkingTTL + 2*time.Second)
+			if readOnly {
+				annotations, problems = store.SnapshotReadOnly(t.Context(), live, at, nil)
+			} else {
+				annotations, problems = store.Snapshot(t.Context(), live, at)
+			}
+			if len(problems) != 0 || len(annotations) != 1 || annotations[0].Provider != completed.Provider || !annotations[0].Fresh {
+				t.Fatalf("expiry displaced fresh evidence: %+v, %v", annotations, problems)
+			}
+		}
+	}
+}
+
+func TestClaudeElicitationNotificationRemainsAttentionUntilLifecycleResumes(t *testing.T) {
+	store := newCoreTestStore(t, testPolicy())
+	now := time.Now()
+	for i, payload := range []string{
+		`{"hook_event_name":"UserPromptSubmit","session_id":"elicitation-test"}`,
+		`{"hook_event_name":"Notification","session_id":"elicitation-test","notification_type":"elicitation_dialog","message":"PRIVATE FORM"}`,
+		`{"hook_event_name":"Stop","session_id":"elicitation-test"}`,
+		`{"hook_event_name":"UserPromptSubmit","session_id":"elicitation-test"}`,
+	} {
+		event, _, err := DecodeHook(ProviderClaude, coreTestPane(), strings.NewReader(payload), now.Add(time.Duration(i)*time.Second))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := applyCore(t, store, event)
+		want := []State{StateWorking, StateAttention, StateCompleted, StateWorking}[i]
+		if got.State != want || i == 1 && got.Reason != "elicitation-dialog" {
+			t.Fatalf("step %d = %+v, want %s", i, got, want)
+		}
+	}
+}
+
 func TestSnapshotReadOnlyOnlyReadsBoundedLiveRecordPaths(t *testing.T) {
 	store := newCoreTestStore(t, testPolicy())
 	now := time.Date(2026, 8, 12, 13, 0, 0, 0, time.UTC)

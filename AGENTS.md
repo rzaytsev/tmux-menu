@@ -10,33 +10,30 @@ Work directly and keep changes small. This is a local tmux utility, not a framew
 - dispatch actions: `internal/action`.
 - config model/defaults: `internal/config`.
 - fzf integration: `internal/picker`.
-- Agent HUD model/render/runtime: `internal/agenthud`.
 - Example user config: `examples/config.toml`.
 - Product behavior/spec: `specs.md`.
 
 ## Current Behavior
 
 - `palette`: configured sections from `palette.sections`; default sessions, then panes. No window rows.
-- `agents`: adaptive live Agent HUD with a stable maximum-four-pane grid,
-  paging, focus, cross-page attention, bounded terminal tails, and trustworthy
-  timing. `/` delegates to the existing flat fzf Agents picker;
-  `agents --picker` opens that picker directly.
+- `agents`: fzf picker with status icons and a selected-pane preview; status
+  and evidence share one colored line pinned above scrollback. `agents --picker` is a compatible
+  alias. Show 15 result rows when space allows and refresh only the selected
+  preview every two seconds. Ctrl-R rebuilds the list; the dashboard is removed.
 - `tools`: configured commands, dynamic Makefile targets from the session root/current dir, and quick dirs.
 - `projects`: lists one-level directories under `projects.roots`, creates/switches tmux sessions natively, and shows whether the configured bootstrap file exists.
 - `links`: captures origin pane scrollback, extracts URL schemes configured by `links.url_schemes` (default HTTP, HTTPS, Slack, and Telegram) plus Jira issue keys when the session-local `links.jira_base_url` is set, copies selected targets, opens file refs through configured `links.open`, opens URLs with `open`, and supports a configured alternate opener.
 - `bookmarks`: scans inline Markdown links from `bookmarks.dirs` in configured order, default `["~/notes/projects/{project}", "~/projects/{project}"]`, skips path parts matching `bookmarks.ignore_patterns` defaulting to `.git`, `.tmp`, `vendor`, `node_modules`, and `.venv`, opens HTTP(S) links with `open`, and opens local file links in a right-side editor pane.
 - `docs`: scans Markdown titles and paths from `docs.dirs`, default notes for `{project}` plus the session root; Space previews, Enter edits, and overlapping roots deduplicate files.
 - `status`: when `status.targets` is configured, concurrently runs one JSON reporter per named active tmux session and shows urgency-sorted project rows with a visible block preview; otherwise it runs optional project-local `status.command` or shows the directory task board from `status.status_dir` and `status.statuses`.
-- Picker views support Tab/Shift-Tab through configured `picker.tab_order` and `Alt-1` main, `Alt-2` agents, `Alt-3` tools, `Alt-4` projects, `Alt-5` status, `Alt-6` bookmarks, `Alt-7` links, and `Alt-8` docs through `fzf --expect`; Ctrl-R refreshes every picker. Ctrl-Y copies targets/paths in links, bookmarks, docs, and directory status. Navigation shortcuts are shown in a persistent footer except in the HUD, while `picker.show_help` controls optional view-specific help.
+- Picker views support Tab/Shift-Tab through configured `picker.tab_order` and `Alt-1` main, `Alt-2` agents, `Alt-3` tools, `Alt-4` projects, `Alt-5` status, `Alt-6` bookmarks, `Alt-7` links, and `Alt-8` docs through `fzf --expect`; Ctrl-R refreshes every picker. Ctrl-Y copies targets/paths in links, bookmarks, docs, and directory status. The navigation footer is hidden; shortcuts stay active, while `picker.show_help` controls optional view-specific help.
 - Global config path: `~/.tmux-menu.conf`; local `.tmux-menu.conf` overlays in the session root and origin pane directory can add commands/quick dirs or replace scalar/list settings.
 
 ## Implementation Rules
 
 - Keep using `fzf --ansi` unless a feature clearly requires a custom TUI.
 - Do not add Bubble Tea just for colors or simple row layout.
-- Bubble Tea is allowed only for the Agent HUD's persistent live grid, focus,
-  resize, and refresh lifecycle. Keep all fuzzy selection and other popup views
-  on fzf.
+- Keep Agents and other popup views on fzf.
 - Keep popup view switching on cheap `fzf --expect` bindings; do not add a custom TUI for simple mode switching.
 - Use stable tmux IDs and pane process identity for dispatch. Immediately before
   a pane switch, require one exact live session/window/pane/pane-PID tuple; fail
@@ -48,29 +45,33 @@ Work directly and keep changes small. This is a local tmux utility, not a framew
 - Normalize hook state to `attention`, `working`, `completed`, `waiting`, and
   `unknown`. Stop means response completion, not task success; working is a
   renewable lease; polling never renews it.
+- A Codex idle title overrides a parent working hook lease unless fresh working
+  child evidence keeps the aggregate active. Preserve completed/attention hook
+  behavior and report terminal-title evidence without old working clocks.
 - Codex agent status reads `#{pane_title}` and `#{window_name}` from Codex `tui.terminal_title`: status item `Ready` is yellow `waiting`, `Working` or `Thinking` is green `working`, `Action Required` is bold red `attention`; spinner-only title markers map braille/dot to `working` and empty marker before `|` to `waiting`.
 - Claude Code agent status reads leading `#{pane_title}` markers when present: star-like idle markers are yellow `waiting`, animated spinner markers are green `working`, explicit needs-input/permission text is bold red `attention`.
 - Other non-Codex agent status uses process state, not blocking output-delta polling: green `working`, yellow `waiting`, dim `unknown`.
 - Agent session-label colors come from `[session].color` in each tmux session root's `.tmux-menu.conf`; supported values cover terminal default, normal and bright ANSI colors, and orange.
 - Agent product, current-thread, and status icons come from `[agents.icons]`; their colors plus thread/workdir colors come from `[agents.colors]`. Agent colors support the session color values plus `dim`; Codex defaults to blue and completed to bright cyan.
-- Keep one shared semantic inventory projection for HUD, picker, and snapshot;
+- Keep one shared semantic inventory projection for picker and snapshot;
   view-specific order and terminal content stay outside it.
-- Each HUD refresh has one deadline and one shared output budget. Capture only
-  the requested visible/focused identities after fresh identity revalidation,
-  and keep hidden pages free of terminal tails.
-- Treat captured terminal content, pane labels, configured icons, and errors as
-  untrusted. Only sanitized printable text and passive allowlisted SGR may enter
-  HUD model state; reset rendering at every line and cell boundary.
-- HUD terminal tails are bounded, memory-only display data. Never add them to
-  hook state, trace, snapshot JSON, or a transcript store.
-- HUD-native keys are observational: they must not send keys, approve input,
-  acknowledge completion, or emit hook events. The delegated picker retains
-  its exact-token `Ctrl-X` completion acknowledgement.
-- Entering Agents from picker Tab/Alt-2 relaunches the top-level HUD even when
-  popup widths match. `/` cancellation resumes the existing HUD model;
-  `agents --picker` cancellation exits.
+- The selected-agent preview freezes pane identity for its picker generation.
+  Use fzf `every(2):refresh-preview` to update its status and scrollback without
+  rebuilding the list or changing the query/selection. Use read-only hook
+  lookups; polling must not renew leases or reconcile hook records. Pin status
+  and evidence in one colored line, truncated to the preview width. Reuse
+  configured provider/status colors. Expired hook reasons are historical only.
+- Bound terminal capture and revalidate the exact live pane identity before and
+  after capture. Sanitize captured terminal content, labels, icons, and errors;
+  allow only printable text and passive allowlisted SGR.
+- Terminal previews are display-only data. Never add them to hook state, trace,
+  snapshot JSON, or a transcript store.
+- `Ctrl-X` retains exact-token completion acknowledgement; it must not approve
+  agent prompts or send keys to the agent.
+- Tab/Alt-2 enter the Agents picker. Relaunch a popup only when its width changes.
+  Both `agents` and `agents --picker` exit on cancellation.
 - The dedicated Agents popup width comes from `agents.popup_width`, default
-  `100%`; v1 adds no other HUD configuration.
+  `100%`.
 - Keep command modes explicit: `popup`, `paste`, `window`, `tmux`, `shell`.
 - Keep quick dirs separate from generic commands, but show commands, Makefile targets, and quick dirs only in `tools`.
 - `commands[].session` filters commands to a matching tmux session, same matching behavior as `quick_dirs[].session`.
@@ -108,11 +109,11 @@ GOCACHE=/tmp/tmux-menu-go-build make test
 GOCACHE=/tmp/tmux-menu-go-build make build
 ```
 
-Add `make race` for concurrency, hook state, or HUD lifecycle changes. Add
+Add `make race` for concurrency or hook state changes. Add
 `make sample-config` and `make validate-config` when config parsing, shape,
 defaults, or examples change. Use the same `GOCACHE` prefix for these checks.
 Documentation-only changes need a diff and affected-link/example review.
-Verify a changed picker/HUD flow in the real interface when authorized; a
+Verify a changed picker flow in the real interface when authorized; a
 passing build does not establish that the installed launcher uses that build.
 
 Do not run interactive `make palette`, `make agents`, `make tools`, `make projects`, `make links`, `make bookmarks`, `make docs`, or `make status` unless the user explicitly wants the popup opened.

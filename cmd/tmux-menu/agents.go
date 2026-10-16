@@ -25,7 +25,7 @@ const (
 	agentStatusWorking              = agentstatus.StateWorking
 	agentStatusCompleted            = agentstatus.StateCompleted
 	agentStatusUnknown              = agentstatus.StateUnknown
-	agentVisibleResultRows          = 12
+	agentVisibleResultRows          = 15
 	agentPickerNonResultRows        = 4
 	agentInventoryOutputBytes int64 = 8 << 20
 	agentProcessOutputBytes   int64 = 4 << 20
@@ -34,22 +34,24 @@ const (
 )
 
 type agentRow struct {
-	pane             tmux.Pane
-	provider         agentstatus.Provider
-	providerPID      int
-	providerSession  string
-	status           agentStatus
-	name             string
-	statusSource     string
-	rawEvent         string
-	reason           string
-	updatedAt        time.Time
-	turnStartedAt    time.Time
-	stateChangedAt   time.Time
-	lastEventAt      time.Time
-	fresh            bool
-	children         []agentstatus.ChildAnnotation
-	acknowledgeToken string
+	pane               tmux.Pane
+	provider           agentstatus.Provider
+	providerPID        int
+	providerSession    string
+	status             agentStatus
+	name               string
+	statusSource       string
+	rawEvent           string
+	reason             string
+	updatedAt          time.Time
+	turnStartedAt      time.Time
+	stateChangedAt     time.Time
+	lastEventAt        time.Time
+	expiredHookReason  string
+	expiredHookEventAt time.Time
+	fresh              bool
+	children           []agentstatus.ChildAnnotation
+	acknowledgeToken   string
 }
 
 type agentInventory struct {
@@ -73,16 +75,17 @@ func selectAgentsAt(ctx context.Context, initialPaneID string) (picker.Result[me
 	if err != nil {
 		return picker.Result[menuItem]{}, err
 	}
-	previewPath, cleanupPreview, err := writeAgentPreviewSnapshot(agentPreviewRows(rows, now))
+	previewPath, cleanupPreview, err := writeAgentPreviewSnapshot(agentPreviewRows(rows, now), cfg.Agents.Colors)
 	if err != nil {
 		return picker.Result[menuItem]{}, err
 	}
 	defer cleanupPreview()
 	previewCommand := agentPreviewCommandForSnapshot(executable, previewPath)
 	keys := append(append([]string(nil), viewSwitchKeys...), "ctrl-x")
-	return picker.SelectWithExpectAndPreviewOptions(ctx, "agents> ", items, keys, viewSwitchFooter(), previewCommand, picker.Options{
+	return picker.SelectWithExpectAndPreviewOptions(ctx, "agents> ", items, keys, "", previewCommand, picker.Options{
 		PreviewWindow: agentPreviewWindow(agentTerminalRows()),
 		InitialIndex:  agentInitialIndex(items, initialPaneID),
+		Bindings:      []string{"every(2):refresh-preview"},
 	})
 }
 
@@ -96,14 +99,6 @@ func loadAgentInventoryBounded(ctx context.Context, fallbackSessionColor string,
 		return agentInventory{}, err
 	}
 	return agentInventoryForPanesBounded(ctx, panes, fallbackSessionColor, now, budget)
-}
-
-func loadAgentInventoryBoundedReadOnly(ctx context.Context, fallbackSessionColor string, now time.Time, budget *tmux.OutputBudget) (agentInventory, error) {
-	panes, err := tmux.ListPanesBounded(ctx, budget, tmux.DefaultPaneListLimits())
-	if err != nil {
-		return agentInventory{}, err
-	}
-	return agentInventoryForPanesBoundedMode(ctx, panes, fallbackSessionColor, now, budget, true)
 }
 
 func agentInventoryForPanes(ctx context.Context, panes []tmux.Pane, fallbackSessionColor string, now time.Time) (agentInventory, error) {
@@ -244,16 +239,17 @@ func agentRowsForPanes(panes []tmux.Pane, snapshot processSnapshot, annotations 
 	for _, pane := range panes {
 		name := agentPaneName(pane, snapshot)
 		detected := isDirectAgentPane(pane) || isProcessTreeAgentPane(pane, snapshot)
-		annotation, claimed := annotations[pane.PaneID]
-		claimed = claimed && agentAnnotationMatchesPane(annotation, pane)
+		annotation, matched := annotations[pane.PaneID]
+		matched = matched && agentAnnotationMatchesPane(annotation, pane)
 		detectedProvider := agentProviderForName(name)
 		panePID, _ := strconv.Atoi(pane.PanePID)
-		if claimed && snapshot.available && annotation.Pane.ProviderPID > 0 && snapshot.providerPIDs[panePID][annotation.Provider] != annotation.Pane.ProviderPID {
-			claimed = false
+		if matched && snapshot.available && annotation.Pane.ProviderPID > 0 && snapshot.providerPIDs[panePID][annotation.Provider] != annotation.Pane.ProviderPID {
+			matched = false
 		}
-		if claimed && detectedProvider != "" && detectedProvider != annotation.Provider {
-			claimed = false
+		if matched && detectedProvider != "" && detectedProvider != annotation.Provider {
+			matched = false
 		}
+		claimed := matched && annotation.Fresh
 		if !detected && !claimed {
 			continue
 		}
@@ -269,10 +265,17 @@ func agentRowsForPanes(panes []tmux.Pane, snapshot processSnapshot, annotations 
 			providerPID = annotation.Pane.ProviderPID
 		}
 		row := agentRow{pane: pane, provider: provider, providerPID: providerPID, status: status, name: name, statusSource: source, rawEvent: rawEvent, fresh: true}
+		if matched && annotation.LeaseExpired {
+			row.expiredHookReason = nonEmpty(annotation.Reason, annotation.RawEvent)
+			row.expiredHookEventAt = annotation.LastEventAt
+			if row.expiredHookEventAt.IsZero() {
+				row.expiredHookEventAt = annotation.UpdatedAt
+			}
+		}
 		if claimed {
+			row.providerSession = annotation.ProviderSessionID
 			if hookStatus, authoritative := agentStatusFromAnnotation(annotation, pane, snapshot); authoritative {
 				row.status = hookStatus
-				row.providerSession = annotation.ProviderSessionID
 				row.statusSource = annotation.Source
 				row.rawEvent = annotation.RawEvent
 				row.reason = annotation.Reason
@@ -344,19 +347,25 @@ func agentPreviewRows(rows []agentRow, now time.Time) map[string]agentPreviewDat
 		if !row.updatedAt.IsZero() {
 			age = compactAgentAge(now.Sub(row.updatedAt))
 		}
+		expiredAge := ""
+		if !row.expiredHookEventAt.IsZero() {
+			expiredAge = compactAgentAge(now.Sub(row.expiredHookEventAt))
+		}
 		preview[row.pane.PaneID] = agentPreviewData{
-			SessionID:       row.pane.SessionID,
-			WindowID:        row.pane.WindowID,
-			PanePID:         row.pane.PanePID,
-			State:           string(row.status),
-			Provider:        nonEmpty(string(row.provider), row.name),
-			ProviderSession: row.providerSession,
-			Source:          row.statusSource,
-			Event:           row.rawEvent,
-			Reason:          row.reason,
-			Age:             age,
-			Fresh:           row.fresh,
-			Children:        children,
+			SessionID:         row.pane.SessionID,
+			WindowID:          row.pane.WindowID,
+			PanePID:           row.pane.PanePID,
+			State:             string(row.status),
+			Provider:          nonEmpty(string(row.provider), row.name),
+			ProviderSession:   row.providerSession,
+			Source:            row.statusSource,
+			Event:             row.rawEvent,
+			Reason:            row.reason,
+			Age:               age,
+			ExpiredHookReason: row.expiredHookReason,
+			ExpiredHookAge:    expiredAge,
+			Fresh:             row.fresh,
+			Children:          children,
 		}
 	}
 	return preview
@@ -379,7 +388,7 @@ func compactAgentAge(age time.Duration) string {
 }
 
 func agentAnnotationMatchesPane(annotation agentstatus.Annotation, pane tmux.Pane) bool {
-	if !annotation.Fresh || annotation.Pane.PaneID != pane.PaneID {
+	if annotation.Pane.PaneID != pane.PaneID {
 		return false
 	}
 	if annotation.Pane.TmuxSessionID != "" && pane.SessionID != "" && annotation.Pane.TmuxSessionID != pane.SessionID {
@@ -404,6 +413,18 @@ func agentStatusFromAnnotation(annotation agentstatus.Annotation, pane tmux.Pane
 	case agentStatusAttention, agentStatusWorking, agentStatusCompleted, agentStatusWaiting:
 	default:
 		return "", false
+	}
+	if annotation.Provider == agentstatus.ProviderCodex && status == agentStatusWorking {
+		if titleStatus, ok := codexPaneTitleStatus(pane); ok && titleStatus == agentStatusWaiting {
+			// A missing Stop must not keep an idle parent working until its
+			// lease expires. The parent's title cannot disprove child work.
+			for _, child := range annotation.Children {
+				if child.Fresh && child.State == agentstatus.StateWorking {
+					return status, true
+				}
+			}
+			return "", false
+		}
 	}
 	if annotation.Provider == agentstatus.ProviderCodex && status == agentStatusAttention && strings.EqualFold(annotation.RawEvent, "PermissionRequest") {
 		fallback := agentPaneStatusForProvider(pane, snapshot, annotation.Provider)
@@ -526,10 +547,10 @@ func agentItemsWithProcessSnapshotAndSessionColorsAndConfig(panes []tmux.Pane, c
 
 func agentPreviewWindow(terminalRows int) string {
 	size := "60%"
-	if previewRows := terminalRows - agentVisibleResultRows - agentPickerNonResultRows; previewRows > 0 {
-		size = strconv.Itoa(previewRows)
+	if terminalRows > 0 {
+		size = strconv.Itoa(max(5, terminalRows-agentVisibleResultRows-agentPickerNonResultRows))
 	}
-	return strings.Join([]string{"down", size, "border-rounded", "wrap", "follow"}, ":")
+	return strings.Join([]string{"down", size, "border-rounded", "wrap", "follow", "noinfo", "~1"}, ":")
 }
 
 func agentTerminalRows() int {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -142,6 +143,31 @@ func TestAgentRowsExposeTimingOnlyForFreshAuthoritativeHookEvidence(t *testing.T
 	}
 }
 
+func TestExpiredHookExplainsFallbackWithoutCreatingOrOverridingAnAgent(t *testing.T) {
+	now := time.Now()
+	pane := tmux.Pane{SessionID: "$1", WindowID: "@2", PaneID: "%2", PanePID: "202", CurrentCommand: "codex", PaneTitle: "Ready"}
+	annotation := hookAnnotation(pane, agentstatus.ProviderCodex, agentstatus.StateUnknown, now)
+	annotation.Fresh, annotation.LeaseExpired = false, true
+	annotation.Reason, annotation.LastEventAt = "tool-start", now.Add(-3*time.Minute)
+	rows := agentRowsForPanes([]tmux.Pane{pane}, processSnapshot{}, map[string]agentstatus.Annotation{"%2": annotation})
+	if len(rows) != 1 || rows[0].status != agentStatusWaiting || rows[0].statusSource != "terminal-title" || !rows[0].fresh || rows[0].expiredHookReason != "tool-start" || !rows[0].expiredHookEventAt.Equal(annotation.LastEventAt) {
+		t.Fatalf("expired hook did not preserve current fallback and historical evidence: %+v", rows)
+	}
+	if !rows[0].lastEventAt.IsZero() || !rows[0].stateChangedAt.IsZero() || !rows[0].turnStartedAt.IsZero() {
+		t.Fatalf("expired hook supplied current timing: %+v", rows[0])
+	}
+	annotation.Pane.PanePID++
+	rows = agentRowsForPanes([]tmux.Pane{pane}, processSnapshot{}, map[string]agentstatus.Annotation{"%2": annotation})
+	if len(rows) != 1 || rows[0].expiredHookReason != "" || !rows[0].expiredHookEventAt.IsZero() {
+		t.Fatalf("expired evidence crossed a pane incarnation: %+v", rows)
+	}
+	annotation.Pane.PanePID--
+	pane.CurrentCommand, pane.PaneTitle = "zsh", "shell"
+	if got := agentRowsForPanes([]tmux.Pane{pane}, processSnapshot{}, map[string]agentstatus.Annotation{"%2": annotation}); len(got) != 0 {
+		t.Fatalf("expired hook created an agent row: %+v", got)
+	}
+}
+
 func TestAgentRowsRejectPaneIncarnationMismatch(t *testing.T) {
 	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
 	pane := tmux.Pane{SessionID: "$2", PaneID: "%2", PanePID: "202", CurrentCommand: "codex", PaneTitle: "Ready"}
@@ -198,12 +224,64 @@ func TestCodexPermissionCandidateNeedsTitleConfirmation(t *testing.T) {
 	}
 }
 
+func TestCodexIdleTitleReconcilesWorkingHook(t *testing.T) {
+	now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	for _, tt := range []struct {
+		name, provider, title, window string
+		state                         agentstatus.State
+		children                      []agentstatus.ChildAnnotation
+		want                          agentStatus
+		wantSource                    string
+	}{
+		{name: "finished tool with ready pane", provider: "codex", title: "Review and commit | Ready", state: agentstatus.StateWorking, want: agentStatusWaiting, wantSource: "terminal-title"},
+		{name: "idle spinner marker", provider: "codex", title: " | Review and commit", state: agentstatus.StateWorking, want: agentStatusWaiting, wantSource: "terminal-title"},
+		{name: "ready window fallback", provider: "codex", title: "Review and commit", window: "Ready", state: agentstatus.StateWorking, want: agentStatusWaiting, wantSource: "terminal-title"},
+		{name: "working pane beats idle window", provider: "codex", title: "Working", window: "Ready", state: agentstatus.StateWorking, want: agentStatusWorking, wantSource: "hook"},
+		{name: "idle pane beats old working window", provider: "codex", title: "Ready", window: "Working", state: agentstatus.StateWorking, want: agentStatusWaiting, wantSource: "terminal-title"},
+		{name: "sleeping process is not idle evidence", provider: "codex", title: "Review and commit", state: agentstatus.StateWorking, want: agentStatusWorking, wantSource: "hook"},
+		{name: "completed remains acknowledgeable", provider: "codex", title: "Ready", state: agentstatus.StateCompleted, want: agentStatusCompleted, wantSource: "hook"},
+		{name: "structured input remains attention", provider: "codex", title: "Ready", state: agentstatus.StateAttention, want: agentStatusAttention, wantSource: "hook"},
+		{name: "claude unchanged", provider: "claude", title: "✳ Claude Code", state: agentstatus.StateWorking, want: agentStatusWorking, wantSource: "hook"},
+		{name: "active child remains working", provider: "codex", title: "Ready", state: agentstatus.StateWorking, children: []agentstatus.ChildAnnotation{{ID: "child", State: agentstatus.StateWorking, Fresh: true}}, want: agentStatusWorking, wantSource: "hook"},
+		{name: "expired child cannot keep parent working", provider: "codex", title: "Ready", state: agentstatus.StateWorking, children: []agentstatus.ChildAnnotation{{ID: "child", State: agentstatus.StateWorking, Fresh: false}}, want: agentStatusWaiting, wantSource: "terminal-title"},
+		{name: "completed child cannot keep parent working", provider: "codex", title: "Ready", state: agentstatus.StateWorking, children: []agentstatus.ChildAnnotation{{ID: "child", State: agentstatus.StateCompleted, Fresh: true}}, want: agentStatusWaiting, wantSource: "terminal-title"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			pane := tmux.Pane{SessionID: "$1", WindowID: "@1", PaneID: "%2", PanePID: "202", CurrentCommand: tt.provider, PaneTitle: tt.title, WindowName: tt.window}
+			annotation := hookAnnotation(pane, agentstatus.Provider(tt.provider), tt.state, now.Add(-37*time.Second))
+			annotation.ProviderSessionID = "thread-1"
+			annotation.RawEvent, annotation.Reason = "PostToolUse", "tool-finished"
+			annotation.TurnStartedAt, annotation.StateChangedAt, annotation.LastEventAt = now.Add(-time.Minute), annotation.UpdatedAt, annotation.UpdatedAt
+			annotation.Children = tt.children
+			if tt.state == agentstatus.StateCompleted {
+				annotation.RawEvent, annotation.Reason, annotation.AcknowledgeToken = "Stop", "response-completed", "completion-token"
+			} else if tt.state == agentstatus.StateAttention {
+				annotation.RawEvent, annotation.Reason = "PreToolUse", "structured-input"
+			}
+			rows := agentRowsForPanes([]tmux.Pane{pane}, processSnapshot{statuses: map[int]agentStatus{202: agentStatusWaiting}}, map[string]agentstatus.Annotation{pane.PaneID: annotation})
+			if len(rows) != 1 || rows[0].status != tt.want || rows[0].statusSource != tt.wantSource {
+				t.Fatalf("rows = %+v, want %s from %s", rows, tt.want, tt.wantSource)
+			}
+			row := rows[0]
+			if row.providerSession != "thread-1" {
+				t.Fatalf("status reconciliation lost the matching conversation: %+v", row)
+			}
+			if tt.wantSource == "terminal-title" && (row.reason != "" || !row.updatedAt.IsZero() || !row.turnStartedAt.IsZero() || !row.stateChangedAt.IsZero() || !row.lastEventAt.IsZero()) {
+				t.Fatalf("idle title retained working hook evidence or timing: %+v", row)
+			}
+			if row.acknowledgeToken != annotation.AcknowledgeToken {
+				t.Fatalf("acknowledgement token = %q, want %q", row.acknowledgeToken, annotation.AcknowledgeToken)
+			}
+		})
+	}
+}
+
 func TestAgentRowsSortBySeverityThenHookRecencyAndRollUpChildren(t *testing.T) {
 	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
 	panes := []tmux.Pane{
 		{SessionName: "work", PaneID: "%1", PanePID: "101", CurrentCommand: "codex", PaneTitle: "Ready"},
 		{SessionName: "work", PaneID: "%2", PanePID: "202", CurrentCommand: "claude", PaneTitle: "✳ Claude Code"},
-		{SessionName: "work", PaneID: "%3", PanePID: "303", CurrentCommand: "codex", PaneTitle: "Ready"},
+		{SessionName: "work", PaneID: "%3", PanePID: "303", CurrentCommand: "codex", PaneTitle: "Working"},
 		{SessionName: "work", PaneID: "%4", PanePID: "404", CurrentCommand: "codex", PaneTitle: "Ready"},
 	}
 	attention := hookAnnotation(panes[0], agentstatus.ProviderCodex, agentstatus.StateAttention, now.Add(-time.Minute))
@@ -295,6 +373,58 @@ func TestRunPickerLoopRefreshesAndReselectsStableAgentPane(t *testing.T) {
 	}
 }
 
+func TestPickerNavigationEntersAgentsWithoutLeavingFzf(t *testing.T) {
+	for _, popup := range []bool{false, true} {
+		for _, key := range []string{"alt-2", "tab"} {
+			t.Run(strconv.FormatBool(popup)+"/"+key, func(t *testing.T) {
+				root := t.TempDir()
+				t.Setenv("HOME", root)
+				t.Setenv("TMUX_MENU_ORIGIN_PANE", "%1")
+				t.Setenv("TMUX_MENU_ORIGIN_PATH", root)
+				t.Setenv("TMUX_MENU_SESSION_ID", "$1")
+				t.Setenv("TMUX_MENU_SESSION_NAME", "test")
+				t.Setenv("TMUX_MENU_SESSION_PATH", root)
+				t.Setenv("TMUX_MENU_DISPATCH_FILE", "")
+				if popup {
+					t.Setenv("TMUX_MENU_DISPATCH_FILE", filepath.Join(root, "dispatch.json"))
+				}
+				if err := os.WriteFile(filepath.Join(root, ".tmux-menu.conf"), []byte("[popup]\nwidth = \"100%\"\n[picker]\ntab_order = [\"palette\", \"agents\"]\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				oldSelect := selectModeForLoop
+				t.Cleanup(func() { selectModeForLoop = oldSelect })
+				var modes []string
+				selectModeForLoop = func(_ context.Context, mode, _ string) (picker.Result[menuItem], error) {
+					modes = append(modes, mode)
+					if len(modes) == 1 {
+						return picker.Result[menuItem]{Key: key}, nil
+					}
+					return picker.Result[menuItem]{}, picker.ErrCanceled
+				}
+				if err := runPickerLoop(t.Context(), "palette"); err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(modes, []string{"palette", "agents"}) {
+					t.Fatalf("picker navigation = %v", modes)
+				}
+			})
+		}
+	}
+}
+
+func TestAgentPreviewRowsKeepExpiredEvidenceSeparateFromCurrentStatus(t *testing.T) {
+	now := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
+	rows := []agentRow{{
+		pane: tmux.Pane{PaneID: "%1"}, provider: agentstatus.ProviderClaude,
+		status: agentStatusWaiting, statusSource: "terminal-title", fresh: true,
+		expiredHookReason: "user-prompt", expiredHookEventAt: now.Add(-3 * time.Minute),
+	}}
+	got := agentPreviewRows(rows, now)["%1"]
+	if got.State != "waiting" || got.Source != "terminal-title" || got.Reason != "" || got.Age != "" || got.ExpiredHookReason != "user-prompt" || got.ExpiredHookAge != "3m ago" {
+		t.Fatalf("expired evidence changed current status or age: %#v", got)
+	}
+}
+
 func TestRunPickerLoopAcknowledgesExactRenderedCompletion(t *testing.T) {
 	oldSelect := selectModeForLoop
 	oldAck := acknowledgeAgent
@@ -377,5 +507,49 @@ func hookAnnotation(pane tmux.Pane, provider agentstatus.Provider, state agentst
 		RawEvent:  "event",
 		UpdatedAt: updatedAt,
 		Fresh:     true,
+	}
+}
+
+func TestAgentHookLookupIsReadOnlyOnIdentityMismatch(t *testing.T) {
+	stateDir := t.TempDir()
+	if err := os.Chmod(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	tmuxEnv := "/private/tmp/tmux-test/default,123,0"
+	t.Setenv("TMUX_MENU_AGENT_STATE_DIR", stateDir)
+	t.Setenv("TMUX", tmuxEnv)
+	store, err := openDefaultAgentStatusStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	paneIdentity := agentstatus.PaneIdentity{
+		ServerID: agentstatus.ServerFingerprint(tmuxEnv), PaneID: "%1", PanePID: 101,
+		ProviderPID: 201, TmuxSessionID: "$1",
+	}
+	_, decision, err := store.Apply(t.Context(), agentstatus.Event{
+		Pane: paneIdentity, Provider: agentstatus.ProviderCodex, ProviderSessionID: "session-1", TurnID: "turn-1",
+		Kind: agentstatus.EventTurnStart, RawEvent: "UserPromptSubmit", ObservedAt: now,
+	})
+	if err != nil || !decision.Applied {
+		t.Fatalf("apply hook record decision=%+v err=%v", decision, err)
+	}
+	pane := tmux.Pane{SessionName: "work", SessionID: "$1", WindowID: "@1", PaneID: "%1", PanePID: "101", CurrentCommand: "codex"}
+	annotations := loadAgentHookAnnotationsMode(t.Context(), []tmux.Pane{pane}, processSnapshot{available: true}, now.Add(time.Second), true, tmux.NewOutputBudget(1<<20))
+	if len(annotations) != 0 {
+		t.Fatalf("mismatched hook remained authoritative: %+v", annotations)
+	}
+	entries, err := os.ReadDir(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := 0
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".json") {
+			records++
+		}
+	}
+	if records != 1 {
+		t.Fatalf("read-only hook lookup retained %d records, want 1", records)
 	}
 }

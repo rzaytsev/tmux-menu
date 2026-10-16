@@ -447,12 +447,15 @@ func TestAgentListUsesConfiguredIconsAndColors(t *testing.T) {
 	}
 }
 
-func TestAgentPreviewWindowLeavesTwelveVisibleResults(t *testing.T) {
-	if got := agentPreviewWindow(40); got != "down:24:border-rounded:wrap:follow" {
+func TestAgentPreviewWindowLeavesFifteenVisibleResults(t *testing.T) {
+	if got := agentPreviewWindow(40); got != "down:21:border-rounded:wrap:follow:noinfo:~1" {
 		t.Fatalf("agentPreviewWindow(40) = %q", got)
 	}
-	if got := agentPreviewWindow(0); got != "down:60%:border-rounded:wrap:follow" {
+	if got := agentPreviewWindow(0); got != "down:60%:border-rounded:wrap:follow:noinfo:~1" {
 		t.Fatalf("agentPreviewWindow(0) = %q", got)
+	}
+	if got := agentPreviewWindow(20); got != "down:5:border-rounded:wrap:follow:noinfo:~1" {
+		t.Fatalf("small terminals must retain usable preview space: %q", got)
 	}
 }
 
@@ -1129,12 +1132,12 @@ func TestStatusItemsListFilesBySubdirAndOpenEditorInPane(t *testing.T) {
 	}
 }
 
-func TestStatusFooterShowsBoardHelpAndNavigation(t *testing.T) {
+func TestStatusFooterShowsBoardHelp(t *testing.T) {
 	cfg := config.Default()
 	cfg.Status.Statuses = []string{"backlog", "doing", "done"}
 
 	got := statusFooter(cfg)
-	want := "BACKLOG / DOING / DONE | Space preview | Enter edit | Ctrl-Y copy path | Ctrl-C cancel\n" + viewSwitchHelp
+	want := "BACKLOG / DOING / DONE | Space preview | Enter edit | Ctrl-Y copy path | Ctrl-C cancel"
 	if got != want {
 		t.Fatalf("statusFooter() = %q, want %q", got, want)
 	}
@@ -1640,16 +1643,11 @@ func TestRunPopupAcceptsBookmarksMode(t *testing.T) {
 	}
 }
 
-func TestRunAgentsCommandRoutesHUDPickerAndRejectsUnknownArguments(t *testing.T) {
-	oldHUD := runAgentHUDSurface
+func TestRunAgentsCommandAlwaysRoutesPickerAndRejectsUnknownArguments(t *testing.T) {
 	oldPicker := runAgentPickerSurface
-	defer func() { runAgentHUDSurface, runAgentPickerSurface = oldHUD, oldPicker }()
+	defer func() { runAgentPickerSurface = oldPicker }()
 
-	hudCalls, pickerCalls := 0, 0
-	runAgentHUDSurface = func(context.Context) error {
-		hudCalls++
-		return nil
-	}
+	pickerCalls := 0
 	runAgentPickerSurface = func(context.Context) error {
 		pickerCalls++
 		return nil
@@ -1666,12 +1664,12 @@ func TestRunAgentsCommandRoutesHUDPickerAndRejectsUnknownArguments(t *testing.T)
 			t.Fatalf("args %#v error = %v, want strict Agents usage", args, err)
 		}
 	}
-	if hudCalls != 1 || pickerCalls != 1 {
-		t.Fatalf("surface calls hud=%d picker=%d", hudCalls, pickerCalls)
+	if pickerCalls != 2 {
+		t.Fatalf("picker calls=%d, want 2", pickerCalls)
 	}
 }
 
-func TestValidatePopupArgsRoutesAgentsHUDAndDirectPickerStrictly(t *testing.T) {
+func TestValidatePopupArgsAcceptsAgentsPickerAliasStrictly(t *testing.T) {
 	for _, args := range [][]string{{"agents"}, {"agents", "--picker"}} {
 		if err := validatePopupArgs(args); err != nil {
 			t.Fatalf("args %#v: %v", args, err)
@@ -1684,11 +1682,14 @@ func TestValidatePopupArgsRoutesAgentsHUDAndDirectPickerStrictly(t *testing.T) {
 	}
 }
 
-func TestPopupAgentsViewAlwaysRelaunchesTopLevelHUD(t *testing.T) {
+func TestPopupAgentsViewRelaunchesOnlyWhenWidthChanges(t *testing.T) {
 	cfg := config.Default()
-	cfg.Popup.Width = cfg.Agents.PopupWidth
 	if !popupViewNeedsRelaunch(cfg, "palette", "agents") {
-		t.Fatal("Agents must relaunch the top-level HUD even when popup widths match")
+		t.Fatal("different-width views must resize the popup")
+	}
+	cfg.Popup.Width = cfg.Agents.PopupWidth
+	if popupViewNeedsRelaunch(cfg, "palette", "agents") {
+		t.Fatal("same-width Agents picker should remain in the existing popup")
 	}
 	if popupViewNeedsRelaunch(cfg, "palette", "tools") {
 		t.Fatal("same-width fzf views should remain in the existing popup")
@@ -1731,12 +1732,6 @@ func TestTabViewModeUsesConfiguredOrder(t *testing.T) {
 		if got := tabViewMode(tc.current, tc.key, order); got != tc.want {
 			t.Fatalf("tabViewMode(%q, %q) = %q, want %q", tc.current, tc.key, got, tc.want)
 		}
-	}
-}
-
-func TestViewSwitchFooter(t *testing.T) {
-	if got := viewSwitchFooter(); got != viewSwitchHelp {
-		t.Fatalf("navigation footer = %q, want %q", got, viewSwitchHelp)
 	}
 }
 

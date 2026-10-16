@@ -131,15 +131,13 @@ func (s *Store) Snapshot(ctx context.Context, live []LivePane, now time.Time) ([
 			continue
 		}
 		annotation := resolve(current, now, s.policy)
-		if annotation.State == StateUnknown && !annotation.Fresh && len(annotation.Children) == 0 {
+		if annotation.State == StateUnknown && !annotation.Fresh && !annotation.LeaseExpired && len(annotation.Children) == 0 {
 			continue
 		}
 		paneKey := annotation.Pane.ServerID + "\x00" + annotation.Pane.PaneID
 		selected, exists := annotationsByPane[paneKey]
 		preferred := liveProviderByPane[paneKey]
-		if !exists || annotation.Provider == preferred && selected.Provider != preferred ||
-			(annotation.Provider == selected.Provider || preferred == "") && annotation.UpdatedAt.After(selected.UpdatedAt) ||
-			annotation.UpdatedAt.Equal(selected.UpdatedAt) && annotation.Provider < selected.Provider {
+		if !exists || preferAnnotation(annotation, selected, preferred) {
 			annotationsByPane[paneKey] = annotation
 		}
 	}
@@ -149,6 +147,17 @@ func (s *Store) Snapshot(ctx context.Context, live []LivePane, now time.Time) ([
 	}
 	sort.SliceStable(annotations, func(i, j int) bool { return annotations[i].Pane.PaneID < annotations[j].Pane.PaneID })
 	return annotations, problems
+}
+
+// Historical expiry details must not displace usable evidence when the live
+// inventory cannot identify which provider owns a pane.
+func preferAnnotation(candidate, selected Annotation, preferred Provider) bool {
+	if preferred == "" && candidate.LeaseExpired != selected.LeaseExpired {
+		return !candidate.LeaseExpired
+	}
+	return candidate.Provider == preferred && selected.Provider != preferred ||
+		(candidate.Provider == selected.Provider || preferred == "") && candidate.UpdatedAt.After(selected.UpdatedAt) ||
+		candidate.UpdatedAt.Equal(selected.UpdatedAt) && candidate.Provider < selected.Provider
 }
 
 // SnapshotReadOnly resolves annotations only from record paths derived from
@@ -218,15 +227,13 @@ func (s *Store) SnapshotReadOnly(ctx context.Context, live []LivePane, now time.
 			continue
 		}
 		annotation := resolve(current, now, s.policy)
-		if annotation.State == StateUnknown && !annotation.Fresh && len(annotation.Children) == 0 {
+		if annotation.State == StateUnknown && !annotation.Fresh && !annotation.LeaseExpired && len(annotation.Children) == 0 {
 			continue
 		}
 		paneKey := annotation.Pane.ServerID + "\x00" + annotation.Pane.PaneID
 		selected, exists := annotationsByPane[paneKey]
 		preferred := liveProviderByPane[paneKey]
-		if !exists || annotation.Provider == preferred && selected.Provider != preferred ||
-			(annotation.Provider == selected.Provider || preferred == "") && annotation.UpdatedAt.After(selected.UpdatedAt) ||
-			annotation.UpdatedAt.Equal(selected.UpdatedAt) && annotation.Provider < selected.Provider {
+		if !exists || preferAnnotation(annotation, selected, preferred) {
 			annotationsByPane[paneKey] = annotation
 		}
 	}

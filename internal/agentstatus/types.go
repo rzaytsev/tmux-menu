@@ -140,6 +140,7 @@ type Annotation struct {
 	StateChangedAt    time.Time         `json:"state_changed_at,omitempty"`
 	LastEventAt       time.Time         `json:"last_event_at,omitempty"`
 	Fresh             bool              `json:"fresh"`
+	LeaseExpired      bool              `json:"lease_expired,omitempty"`
 	Children          []ChildAnnotation `json:"children,omitempty"`
 	AcknowledgeToken  string            `json:"acknowledge_token,omitempty"`
 }

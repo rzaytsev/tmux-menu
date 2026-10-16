@@ -30,11 +30,9 @@ type menuItem struct {
 var execTmux = tmux.Exec
 var selectModeForLoop = selectModeAt
 var acknowledgeAgent = acknowledgeAgentCompletion
-var runAgentHUDSurface func(context.Context) error
 var runAgentPickerSurface func(context.Context) error
 
 func init() {
-	runAgentHUDSurface = runAgentHUD
 	runAgentPickerSurface = func(ctx context.Context) error { return runPickerLoop(ctx, "agents") }
 }
 
@@ -57,7 +55,7 @@ func run(ctx context.Context, args []string) error {
 	case "agents":
 		return runAgentsCommand(ctx, args[1:])
 	case "tools":
-		return runPickerLoop(ctx, "tools")
+		return runToolsCommand(ctx, args[1:])
 	case "projects":
 		return runPickerLoop(ctx, "projects")
 	case "links":
@@ -106,7 +104,7 @@ Usage:
   tmux-menu palette
   tmux-menu agents
   tmux-menu agents --picker
-  tmux-menu tools
+  tmux-menu tools [name]
   tmux-menu projects
   tmux-menu links
   tmux-menu bookmarks
@@ -200,9 +198,7 @@ func runPopup(ctx context.Context, args []string) error {
 
 func runAgentsCommand(ctx context.Context, args []string) error {
 	switch {
-	case len(args) == 0:
-		return runAgentHUDSurface(ctx)
-	case len(args) == 1 && args[0] == "--picker":
+	case len(args) == 0 || len(args) == 1 && args[0] == "--picker":
 		return runAgentPickerSurface(ctx)
 	default:
 		return fmt.Errorf("usage: tmux-menu agents [--picker]")
@@ -234,7 +230,7 @@ func popupWidthChanges(cfg config.Config, currentMode, nextMode string) bool {
 }
 
 func popupViewNeedsRelaunch(cfg config.Config, currentMode, nextMode string) bool {
-	return nextMode == "agents" || popupWidthChanges(cfg, currentMode, nextMode)
+	return popupWidthChanges(cfg, currentMode, nextMode)
 }
 
 func buildPopupCommand(exe, dispatchPath string, rt runtimeContext, args []string) string {
@@ -256,12 +252,7 @@ func buildPopupCommand(exe, dispatchPath string, rt runtimeContext, args []strin
 
 var viewSwitchKeys = []string{"tab", "btab", "alt-1", "alt-2", "alt-3", "alt-4", "alt-5", "alt-6", "alt-7", "alt-8", "ctrl-r"}
 
-const viewSwitchHelp = "Tab/Shift-Tab: views  Ctrl-R: refresh\nAlt: 1 Main  2 Agents  3 Tools\nAlt: 4 Projects  5 Status  6 Bookmarks\nAlt: 7 Links  8 Docs"
 const popupViewDispatchMode = "picker-view"
-
-func viewSwitchFooter() string {
-	return viewSwitchHelp
-}
 
 func pickerPreviewWindow(width string, options ...string) string {
 	parts := []string{"right", width}
@@ -355,9 +346,6 @@ func runPickerLoop(ctx context.Context, mode string) error {
 			}
 			if os.Getenv("TMUX_MENU_DISPATCH_FILE") != "" && popupViewNeedsRelaunch(cfg, mode, next) {
 				return dispatch(ctx, action.Dispatch{Mode: popupViewDispatchMode, Cmd: next})
-			}
-			if os.Getenv("TMUX_MENU_DISPATCH_FILE") == "" && next == "agents" {
-				return runAgentHUDSurface(ctx)
 			}
 			mode = next
 			if mode != "agents" {

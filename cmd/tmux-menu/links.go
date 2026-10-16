@@ -65,7 +65,7 @@ func containsLinkExpectKey(keys []string, want string) bool {
 }
 
 func linkFooterForConfig(cfg config.Config) string {
-	footer := "Ctrl-Y copy only\n" + viewSwitchFooter()
+	footer := "Ctrl-Y copy only"
 	if !cfg.Picker.ShowHelp || strings.TrimSpace(cfg.Links.Alternate.Key) == "" {
 		return footer
 	}

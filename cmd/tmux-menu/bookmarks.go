@@ -38,7 +38,7 @@ func selectBookmarks(ctx context.Context) (picker.Result[menuItem], error) {
 	if err != nil {
 		return picker.Result[menuItem]{}, err
 	}
-	return picker.SelectWithExpect(ctx, "bookmarks> ", items, filePickerKeys(), "Ctrl-Y copy target\n"+viewSwitchFooter())
+	return picker.SelectWithExpect(ctx, "bookmarks> ", items, filePickerKeys(), "Ctrl-Y copy target")
 }
 
 func bookmarkItems(cfg config.BookmarksConfig, editor config.EditorConfig, projectName string) ([]picker.Item[menuItem], error) {

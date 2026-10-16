@@ -15,8 +15,11 @@ import (
 func TestAgentPreviewRejectsReplacedPaneBeforeAndAfterCapture(t *testing.T) {
 	for _, changedAt := range []int{1, 2} {
 		t.Run(string(rune('0'+changedAt)), func(t *testing.T) {
-			oldList, oldCapture := agentPreviewListPanes, agentHookTmuxOutput
-			t.Cleanup(func() { agentPreviewListPanes, agentHookTmuxOutput = oldList, oldCapture })
+			oldList, oldCapture, oldLoad := agentPreviewListPanes, agentHookTmuxOutput, agentPreviewLoadRow
+			t.Cleanup(func() { agentPreviewListPanes, agentHookTmuxOutput, agentPreviewLoadRow = oldList, oldCapture, oldLoad })
+			agentPreviewLoadRow = func(context.Context, tmux.Pane) agentPreviewData {
+				return agentPreviewData{State: "working", Source: "terminal-title", Fresh: true}
+			}
 			calls, captures := 0, 0
 			agentPreviewListPanes = func(context.Context) ([]tmux.Pane, error) {
 				calls++

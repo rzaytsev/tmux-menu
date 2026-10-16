@@ -91,6 +91,24 @@ func TestResolveWinningChildCarriesItsTimingAnchors(t *testing.T) {
 	}
 }
 
+func TestResolveRetainsExpiredChildEvidenceWithoutAuthority(t *testing.T) {
+	now := time.Now()
+	policy := testPolicy()
+	event := coreEvent(EventSubagentStart, "turn-1", now)
+	event.ChildID, event.Reason = "child-1", "subagent-start"
+	current, _ := reduce(record{}, event, policy)
+	got := resolve(current, now.Add(policy.WorkingTTL+time.Second), policy)
+	if got.State != StateUnknown || got.Fresh || !got.LeaseExpired || got.Reason != "subagent-start" || !got.LastEventAt.Equal(now) {
+		t.Fatalf("expired child evidence = %+v", got)
+	}
+	attention := coreEvent(EventAttentionConfirmed, "turn-1", now.Add(policy.WorkingTTL+2*time.Second))
+	current, _ = reduce(current, attention, policy)
+	got = resolve(current, attention.ObservedAt, policy)
+	if got.State != StateAttention || !got.Fresh || got.LeaseExpired {
+		t.Fatalf("expired child obscured authoritative parent: %+v", got)
+	}
+}
+
 func TestTimingMetadataSerializationContainsNoPayloadFields(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
 	current, _ := reduce(record{}, coreEvent(EventTurnStart, "turn-1", now), testPolicy())

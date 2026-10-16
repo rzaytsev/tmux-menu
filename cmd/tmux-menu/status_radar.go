@@ -409,5 +409,5 @@ func colorStatusRadarBadge(status string) string {
 }
 
 func statusRadarFooter() string {
-	return "ATTENTION / WARNING / UNKNOWN / OK | Enter switch | Space preview | Ctrl-C cancel\n" + viewSwitchFooter()
+	return "ATTENTION / WARNING / UNKNOWN / OK | Enter switch | Space preview | Ctrl-C cancel"
 }

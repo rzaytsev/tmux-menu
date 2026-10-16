@@ -21,7 +21,7 @@ func selectProjects(ctx context.Context) (picker.Result[menuItem], error) {
 	if err != nil {
 		return picker.Result[menuItem]{}, err
 	}
-	return picker.SelectWithExpect(ctx, "projects> ", projectItems(projects, cfg.Projects.BootstrapFile), viewSwitchKeys, viewSwitchFooter())
+	return picker.SelectWithExpect(ctx, "projects> ", projectItems(projects, cfg.Projects.BootstrapFile), viewSwitchKeys, "")
 }
 func listProjects(roots []string) ([]string, error) {
 	return listProjectsInRoots(roots)

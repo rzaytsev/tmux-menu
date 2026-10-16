@@ -33,7 +33,7 @@ func selectPalette(ctx context.Context) (picker.Result[menuItem], error) {
 	items := paletteItemsWithAgentSource(panes, rt.SessionID, rt.OriginPane, cfg.Palette.Sections, func() []picker.Item[menuItem] {
 		return agentRows
 	})
-	return picker.SelectWithExpect(ctx, "tmux-menu> ", items, viewSwitchKeys, viewSwitchFooter())
+	return picker.SelectWithExpect(ctx, "tmux-menu> ", items, viewSwitchKeys, "")
 }
 
 func paletteItems(panes []tmux.Pane, currentSessionID string, currentPaneID string, sections []string) []picker.Item[menuItem] {

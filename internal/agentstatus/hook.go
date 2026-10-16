@@ -147,8 +147,13 @@ func classifyHook(provider Provider, raw hookEnvelope) (EventKind, string) {
 	case "PermissionDenied":
 		return EventFailure, "permission-denied"
 	case "Notification":
-		if provider == ProviderClaude && raw.Notification == "permission_prompt" {
-			return EventAttentionConfirmed, "permission-notification"
+		if provider == ProviderClaude {
+			switch raw.Notification {
+			case "permission_prompt":
+				return EventAttentionConfirmed, "permission-notification"
+			case "elicitation_dialog":
+				return EventAttentionConfirmed, "elicitation-dialog"
+			}
 		}
 		return EventObservedOnly, "notification"
 	case "Stop":

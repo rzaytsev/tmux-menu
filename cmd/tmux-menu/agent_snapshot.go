@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"os"
 	"time"
 
+	"tmux-menu/internal/agentstatus"
 	"tmux-menu/internal/config"
+	"tmux-menu/internal/tmux"
 )
 
 const agentStatusSnapshotVersion = 1
@@ -17,17 +20,29 @@ type agentStatusSnapshot struct {
 }
 
 type agentStatusSnapshotRow struct {
-	PaneID   string `json:"pane_id"`
-	Provider string `json:"provider"`
-	Status   string `json:"status"`
-	Source   string `json:"source"`
-	Fresh    bool   `json:"fresh"`
+	ServerID          string `json:"server_id"`
+	SessionID         string `json:"session_id"`
+	WindowID          string `json:"window_id"`
+	PanePID           string `json:"pane_pid"`
+	ProviderSessionID string `json:"provider_session_id,omitempty"`
+	PaneID            string `json:"pane_id"`
+	Provider          string `json:"provider"`
+	Status            string `json:"status"`
+	Source            string `json:"source"`
+	Fresh             bool   `json:"fresh"`
 }
 
 var writeAgentStatusSnapshotCommand = writeAgentStatusSnapshot
 
 func writeAgentStatusSnapshot(ctx context.Context, out io.Writer) error {
-	inventory, err := loadAgentInventory(ctx, config.DefaultSessionColor, time.Now())
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	budget := tmux.NewOutputBudget(agentInventoryOutputBytes)
+	panes, err := tmux.ListPanesBounded(ctx, budget, tmux.DefaultPaneListLimits())
+	if err != nil {
+		return err
+	}
+	inventory, err := agentInventoryForPanesBoundedMode(ctx, panes, config.DefaultSessionColor, time.Now(), budget, true)
 	if err != nil {
 		return err
 	}
@@ -42,11 +57,16 @@ func agentStatusSnapshotForRows(rows []agentRow) agentStatusSnapshot {
 			provider = row.name
 		}
 		agents = append(agents, agentStatusSnapshotRow{
-			PaneID:   row.pane.PaneID,
-			Provider: provider,
-			Status:   string(row.status),
-			Source:   row.statusSource,
-			Fresh:    row.fresh,
+			ServerID:          agentstatus.ServerFingerprint(os.Getenv("TMUX")),
+			SessionID:         row.pane.SessionID,
+			WindowID:          row.pane.WindowID,
+			PanePID:           row.pane.PanePID,
+			ProviderSessionID: row.providerSession,
+			PaneID:            row.pane.PaneID,
+			Provider:          provider,
+			Status:            string(row.status),
+			Source:            row.statusSource,
+			Fresh:             row.fresh,
 		})
 	}
 	return agentStatusSnapshot{Version: agentStatusSnapshotVersion, Agents: agents}

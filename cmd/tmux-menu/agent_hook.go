@@ -17,8 +17,10 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/charmbracelet/x/ansi"
 
 	"tmux-menu/internal/agentstatus"
+	"tmux-menu/internal/config"
 	"tmux-menu/internal/displaytext"
 	"tmux-menu/internal/shellquote"
 	"tmux-menu/internal/tmux"
@@ -52,28 +54,32 @@ var (
 	agentHookCurrentPID               = os.Getpid
 	agentHookProviderAncestorResolver = resolveAgentHookProviderAncestor
 	agentPreviewListPanes             = tmux.ListPanes
+	agentPreviewLoadRow               = loadAgentPreviewRow
 )
 
-// agentPreviewData is the metadata frozen for one Agents picker generation.
+// agentPreviewData holds display metadata and the frozen picker pane identity.
 // It deliberately excludes prompts, transcripts, tool input, and model output.
 type agentPreviewData struct {
-	SessionID       string   `json:"session_id,omitempty"`
-	WindowID        string   `json:"window_id,omitempty"`
-	PanePID         string   `json:"pane_pid,omitempty"`
-	State           string   `json:"state"`
-	Provider        string   `json:"provider"`
-	ProviderSession string   `json:"provider_session,omitempty"`
-	Source          string   `json:"source"`
-	Event           string   `json:"event,omitempty"`
-	Reason          string   `json:"reason,omitempty"`
-	Age             string   `json:"age,omitempty"`
-	Fresh           bool     `json:"fresh"`
-	Children        []string `json:"children,omitempty"`
+	SessionID         string   `json:"session_id,omitempty"`
+	WindowID          string   `json:"window_id,omitempty"`
+	PanePID           string   `json:"pane_pid,omitempty"`
+	State             string   `json:"state"`
+	Provider          string   `json:"provider"`
+	ProviderSession   string   `json:"provider_session,omitempty"`
+	Source            string   `json:"source"`
+	Event             string   `json:"event,omitempty"`
+	Reason            string   `json:"reason,omitempty"`
+	Age               string   `json:"age,omitempty"`
+	ExpiredHookReason string   `json:"expired_hook_reason,omitempty"`
+	ExpiredHookAge    string   `json:"expired_hook_age,omitempty"`
+	Fresh             bool     `json:"fresh"`
+	Children          []string `json:"children,omitempty"`
 }
 
 type agentPreviewSnapshot struct {
 	Version int                         `json:"version"`
 	Rows    map[string]agentPreviewData `json:"rows"`
+	Colors  config.AgentColorsConfig    `json:"colors"`
 }
 
 // runAgentHook is the command handler routed by run for the agent-hook family.
@@ -372,7 +378,7 @@ func marshalHookSnippet(events []string, command string, codex bool) (string, er
 			}},
 		}
 		if !codex && event == "Notification" {
-			group["matcher"] = "permission_prompt"
+			group["matcher"] = "permission_prompt|elicitation_dialog"
 		}
 		hooks[event] = []map[string]any{group}
 	}
@@ -783,7 +789,7 @@ func traceEdgesForProvider(traces []agentstatus.TraceEntry, provider agentstatus
 	return observed
 }
 
-func writeAgentPreviewSnapshot(rows map[string]agentPreviewData) (string, func(), error) {
+func writeAgentPreviewSnapshot(rows map[string]agentPreviewData, colors config.AgentColorsConfig) (string, func(), error) {
 	if rows == nil {
 		rows = map[string]agentPreviewData{}
 	}
@@ -799,6 +805,8 @@ func writeAgentPreviewSnapshot(rows map[string]agentPreviewData) (string, func()
 		row.Event = safePreviewText(row.Event, 64)
 		row.Reason = safePreviewText(row.Reason, 160)
 		row.Age = safePreviewText(row.Age, 32)
+		row.ExpiredHookReason = safePreviewText(row.ExpiredHookReason, 160)
+		row.ExpiredHookAge = safePreviewText(row.ExpiredHookAge, 32)
 		if len(row.Children) > agentPreviewMaxChildren {
 			row.Children = append([]string(nil), row.Children[:agentPreviewMaxChildren]...)
 		} else {
@@ -815,7 +823,7 @@ func writeAgentPreviewSnapshot(rows map[string]agentPreviewData) (string, func()
 	}
 	cleanup := func() { _ = os.RemoveAll(dir) }
 	path := filepath.Join(dir, "snapshot.json")
-	if err := writeAgentPreviewSnapshotFile(path, agentPreviewSnapshot{Version: agentPreviewSnapshotVersion, Rows: clean}); err != nil {
+	if err := writeAgentPreviewSnapshotFile(path, agentPreviewSnapshot{Version: agentPreviewSnapshotVersion, Rows: clean, Colors: colors}); err != nil {
 		cleanup()
 		return "", nil, err
 	}
@@ -851,20 +859,28 @@ func runAgentPreview(ctx context.Context, snapshotPath, paneID string, out io.Wr
 	if !ok {
 		return fmt.Errorf("pane is not present in frozen preview")
 	}
-	var header bytes.Buffer
-	printAgentPreviewHeader(&header, row)
-	fmt.Fprint(out, displaytext.Block(header.String()))
-	if !agentPreviewIdentityLive(ctx, paneID, row) {
-		fmt.Fprintln(out, "\n[pane changed or unavailable; Ctrl-R to refresh]")
+	colors := snapshot.Colors
+	if colors == (config.AgentColorsConfig{}) {
+		colors = config.Default().Agents.Colors
+	}
+	pane, live := agentPreviewLivePane(ctx, paneID, row)
+	if !live {
+		printAgentPreviewHeader(out, agentPreviewData{State: "unavailable", Source: "pane changed or unavailable; Ctrl-R to refresh"}, colors)
 		return nil
 	}
+	// Refresh only the selected pane. Keep the rendered list and its exact
+	// acknowledgement tokens frozen until the user explicitly refreshes it.
+	current := agentPreviewLoadRow(ctx, pane)
 	captured, err := agentHookTmuxOutput(ctx, "capture-pane", "-e", "-p", "-S", "-"+strconv.Itoa(agentPreviewCaptureLines), "-t", paneID)
+	if _, live := agentPreviewLivePane(ctx, paneID, row); !live {
+		printAgentPreviewHeader(out, agentPreviewData{State: "unavailable", Source: "pane changed during capture; Ctrl-R to refresh"}, colors)
+		return nil
+	}
+	var header bytes.Buffer
+	printAgentPreviewHeader(&header, current, colors)
+	fmt.Fprint(out, displaytext.Block(header.String()))
 	if err != nil {
 		fmt.Fprintln(out, "\n[scrollback unavailable]")
-		return nil
-	}
-	if !agentPreviewIdentityLive(ctx, paneID, row) {
-		fmt.Fprintln(out, "\n[pane changed during capture; Ctrl-R to refresh]")
 		return nil
 	}
 	trimmed := trimTrailingBlankLines(string(captured))
@@ -875,21 +891,36 @@ func runAgentPreview(ctx context.Context, snapshotPath, paneID string, out io.Wr
 	return nil
 }
 
-func agentPreviewIdentityLive(ctx context.Context, paneID string, row agentPreviewData) bool {
+func loadAgentPreviewRow(ctx context.Context, pane tmux.Pane) agentPreviewData {
+	now := time.Now()
+	budget := tmux.NewOutputBudget(agentInventoryOutputBytes)
+	panes := []tmux.Pane{pane}
+	processes := loadAgentProcessSnapshotBounded(ctx, panes, budget)
+	annotations := loadAgentHookAnnotationsMode(ctx, panes, processes, now, true, budget)
+	rows := agentRowsForPanes(panes, processes, annotations)
+	if len(rows) == 1 {
+		return agentPreviewRows(rows, now)[pane.PaneID]
+	}
+	return agentPreviewData{State: "unknown", Source: "unknown"}
+}
+
+func agentPreviewLivePane(ctx context.Context, paneID string, row agentPreviewData) (tmux.Pane, bool) {
 	if !tmux.IsCanonicalID(row.SessionID, '$') || !tmux.IsCanonicalID(row.WindowID, '@') || !canonicalPositiveDecimal(row.PanePID) {
-		return false
+		return tmux.Pane{}, false
 	}
 	panes, err := agentPreviewListPanes(ctx)
 	if err != nil {
-		return false
+		return tmux.Pane{}, false
 	}
 	matches := 0
+	var matched tmux.Pane
 	for _, pane := range panes {
 		if pane.PaneID == paneID && pane.PanePID == row.PanePID && pane.SessionID == row.SessionID && pane.WindowID == row.WindowID {
 			matches++
+			matched = pane
 		}
 	}
-	return matches == 1
+	return matched, matches == 1
 }
 
 func readAgentPreviewSnapshot(path string) (agentPreviewSnapshot, error) {
@@ -920,30 +951,71 @@ func readAgentPreviewSnapshot(path string) (agentPreviewSnapshot, error) {
 	return snapshot, nil
 }
 
-func printAgentPreviewHeader(out io.Writer, row agentPreviewData) {
-	freshness := "stale"
+func printAgentPreviewHeader(out io.Writer, row agentPreviewData, colors config.AgentColorsConfig) {
+	providerColor := colors.Other
+	switch row.Provider {
+	case "codex":
+		providerColor = colors.Codex
+	case "claude":
+		providerColor = colors.Claude
+	}
+	stateColor := colors.Unknown
+	switch agentStatus(row.State) {
+	case agentStatusAttention:
+		stateColor = colors.Attention
+	case agentStatusWorking:
+		stateColor = colors.Working
+	case agentStatusCompleted:
+		stateColor = colors.Completed
+	case agentStatusWaiting:
+		stateColor = colors.Waiting
+	}
+	freshness := colorAgentText("stale", "yellow", false)
 	if row.Fresh {
-		freshness = "fresh"
+		freshness = dim("fresh")
 	}
-	parts := []string{safePreviewText(nonEmpty(row.Provider, "agent"), 32), safePreviewText(nonEmpty(row.State, "unknown"), 32), freshness}
+	parts := []string{
+		colorAgentText(safePreviewText(nonEmpty(row.Provider, "agent"), 32), providerColor, true),
+		colorAgentText(safePreviewText(nonEmpty(row.State, "unknown"), 32), stateColor, true),
+		freshness,
+	}
 	if row.Age != "" {
-		parts = append(parts, safePreviewText(row.Age, 32))
+		parts = append(parts, dim(safePreviewText(row.Age, 32)))
 	}
-	fmt.Fprintf(out, "Status: %s\n", strings.Join(parts, " | "))
-	if row.Source != "" || row.Event != "" {
-		fmt.Fprintf(out, "Evidence: %s", safePreviewText(nonEmpty(row.Source, "unknown"), 48))
-		if row.Event != "" {
-			fmt.Fprintf(out, " (%s)", safePreviewText(row.Event, 64))
+	source := nonEmpty(row.Source, "unknown")
+	switch source {
+	case "terminal-title":
+		source = "terminal title"
+	case "process":
+		source = "process fallback"
+	case "fallback":
+		source = "unknown"
+	}
+	evidence := colorAgentText(safePreviewText(source, 64), "cyan", false)
+	reason := row.Reason
+	if reason == "" && row.Source == "hook" {
+		reason = row.Event
+	}
+	if reason != "" {
+		evidence += dim(": ") + colorAgentText(safePreviewText(reason, 160), "default", false)
+	}
+	parts = append(parts, evidence)
+	if row.ExpiredHookReason != "" {
+		expired := colorAgentText("hook expired: "+safePreviewText(row.ExpiredHookReason, 160), "yellow", false)
+		if row.ExpiredHookAge != "" {
+			expired += dim(" (" + safePreviewText(row.ExpiredHookAge, 32) + ")")
 		}
-		fmt.Fprintln(out)
+		parts = append(parts, expired)
 	}
+	line := displaytext.Line(strings.Join(parts, dim(" · ")))
+	if columns, err := strconv.Atoi(os.Getenv("FZF_PREVIEW_COLUMNS")); err == nil && columns > 0 {
+		line = ansi.Truncate(line, columns, "…")
+	}
+	fmt.Fprintln(out, line+ansiReset)
 	if session := boundedOpaqueID(row.ProviderSession); session != "" {
 		fmt.Fprintf(out, "Session: %s\n", session)
 	}
-	if row.Reason != "" {
-		fmt.Fprintf(out, "Reason: %s\n", safePreviewText(row.Reason, 160))
-	}
-	children := append([]string(nil), row.Children...)
+	children := append([]string(nil), row.Children[:min(len(row.Children), agentPreviewMaxChildren)]...)
 	sort.Strings(children)
 	for _, child := range children {
 		fmt.Fprintf(out, "Child: %s\n", safePreviewText(child, 160))

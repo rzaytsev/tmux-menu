@@ -14,13 +14,15 @@ import (
 )
 
 func TestAgentStatusSnapshotForRows(t *testing.T) {
+	t.Setenv("TMUX", "/tmp/test-socket,123,0")
 	got := agentStatusSnapshotForRows([]agentRow{
 		{
-			pane:         tmux.Pane{PaneID: "%7"},
-			provider:     agentstatus.ProviderCodex,
-			status:       agentStatusCompleted,
-			statusSource: "hook",
-			fresh:        true,
+			pane:            tmux.Pane{PaneID: "%7", PanePID: "77", SessionID: "$1", WindowID: "@2", SessionPath: "/tmp/project"},
+			providerSession: "thread-1",
+			provider:        agentstatus.ProviderCodex,
+			status:          agentStatusCompleted,
+			statusSource:    "hook",
+			fresh:           true,
 		},
 		{
 			pane:         tmux.Pane{PaneID: "%9"},
@@ -40,6 +42,10 @@ func TestAgentStatusSnapshotForRows(t *testing.T) {
 	if got.Agents[1].PaneID != "%9" || got.Agents[1].Provider != "opencode" || got.Agents[1].Status != "waiting" {
 		t.Fatalf("fallback provider row = %#v", got.Agents[1])
 	}
+	row := got.Agents[0]
+	if row.ServerID != agentstatus.ServerFingerprint("/tmp/test-socket,123,0") || row.SessionID != "$1" || row.WindowID != "@2" || row.PanePID != "77" || row.ProviderSessionID != "thread-1" {
+		t.Fatalf("snapshot lost conversation identity: %+v", row)
+	}
 }
 
 func TestAgentStatusSnapshotV1RemainsMetadataOnly(t *testing.T) {
@@ -58,7 +64,7 @@ func TestAgentStatusSnapshotV1RemainsMetadataOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	encoded := out.String()
-	for _, forbidden := range []string{"turn_started_at", "state_changed_at", "last_event_at", "terminal", "content", "focus", "page"} {
+	for _, forbidden := range []string{"turn_started_at", "state_changed_at", "last_event_at", "terminal", "content", "focus", "page", "session_path", "cwd"} {
 		if strings.Contains(encoded, forbidden) {
 			t.Fatalf("snapshot v1 leaked %q: %s", forbidden, encoded)
 		}
