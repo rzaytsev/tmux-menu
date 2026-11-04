@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"os/exec"
 	"sort"
@@ -14,6 +16,7 @@ import (
 	"tmux-menu/internal/agentstatus"
 	"tmux-menu/internal/config"
 	"tmux-menu/internal/picker"
+	"tmux-menu/internal/shellquote"
 	"tmux-menu/internal/tmux"
 )
 
@@ -26,7 +29,7 @@ const (
 	agentStatusCompleted            = agentstatus.StateCompleted
 	agentStatusUnknown              = agentstatus.StateUnknown
 	agentVisibleResultRows          = 15
-	agentPickerNonResultRows        = 4
+	agentPickerNonResultRows        = 6
 	agentInventoryOutputBytes int64 = 8 << 20
 	agentProcessOutputBytes   int64 = 4 << 20
 	agentProcessRows                = 32768
@@ -70,7 +73,7 @@ func selectAgentsAt(ctx context.Context, initialPaneID string) (picker.Result[me
 		return picker.Result[menuItem]{}, err
 	}
 	rows := agentRowsForPicker(inventory.rows)
-	items := agentItemsForRows(rows, rt.OriginPane, inventory.sessionColors, cfg.Agents, true)
+	items, header := agentPickerItemsForRows(rows, rt.OriginPane, inventory.sessionColors, cfg.Agents, agentTerminalColumns())
 	executable, err := os.Executable()
 	if err != nil {
 		return picker.Result[menuItem]{}, err
@@ -80,13 +83,49 @@ func selectAgentsAt(ctx context.Context, initialPaneID string) (picker.Result[me
 		return picker.Result[menuItem]{}, err
 	}
 	defer cleanupPreview()
+	snapshot, err := readAgentPreviewSnapshot(previewPath)
+	if err != nil {
+		return picker.Result[menuItem]{}, err
+	}
+	snapshot.OriginPane, snapshot.OriginSession, snapshot.Agents = rt.OriginPane, rt.SessionID, cfg.Agents
+	snapshot.Filter, snapshot.SessionOnly = agentFilterFromContext(ctx)
+	snapshot.ProviderPIDs = map[string]int{}
+	for _, row := range rows {
+		snapshot.Order = append(snapshot.Order, row.pane.PaneID)
+		snapshot.ProviderPIDs[row.pane.PaneID] = row.providerPID
+	}
+	if err := writeAgentPreviewSnapshotFile(previewPath, snapshot); err != nil {
+		return picker.Result[menuItem]{}, err
+	}
 	previewCommand := agentPreviewCommandForSnapshot(executable, previewPath)
-	keys := append(append([]string(nil), viewSwitchKeys...), "ctrl-x")
-	return picker.SelectWithExpectAndPreviewOptions(ctx, "agents> ", items, keys, "", previewCommand, picker.Options{
-		PreviewWindow: agentPreviewWindow(agentTerminalRows()),
-		InitialIndex:  agentInitialIndex(items, initialPaneID),
-		Bindings:      []string{"every(2):refresh-preview"},
+	keys := append(append([]string(nil), viewSwitchKeys...), "ctrl-x", "ctrl-y", "ctrl-a", "ctrl-s", "ctrl-d")
+	command := shellquote.Quote(executable) + " agent-hook picker-rows " + shellquote.Quote(previewPath) + ` "$FZF_COLUMNS" "$FZF_QUERY"`
+	refreshCommand := shellquote.Quote(executable) + " agent-hook picker-refresh " + shellquote.Quote(previewPath) + ` "$FZF_COLUMNS" "$FZF_QUERY"`
+	query := ""
+	if state := picker.StateFromContext(ctx); state != nil {
+		query = state.Query
+	}
+	var input bytes.Buffer
+	if err := writeAgentPickerRows(ctx, snapshot, rows, inventory.sessionColors, agentTerminalColumns(), query, &input); err != nil {
+		return picker.Result[menuItem]{}, err
+	}
+	result, err := picker.SelectWithExpectAndPreviewOptions(ctx, "agents> ", items, keys, "", previewCommand, picker.Options{
+		Input:          input.String(),
+		InputHeader:    []string{agentSummary(rows, snapshot, len(rows)), header},
+		LiveCommand:    command,
+		RefreshCommand: refreshCommand,
+		PreviewWindow:  agentPreviewWindow(agentTerminalRows()),
+		InitialIndex:   agentInitialIndex(items, initialPaneID),
 	})
+	if err == nil && result.Selected && result.Metadata != "" {
+		var metadata agentPickerMetadata
+		if err := decodeAgentPickerMetadata(result.Metadata, &metadata); err != nil {
+			return picker.Result[menuItem]{}, err
+		}
+		result.Value.agentAckToken = metadata.AckToken
+		result.Value.copyTarget = metadata.Workdir
+	}
+	return result, err
 }
 
 func loadAgentInventory(ctx context.Context, fallbackSessionColor string, now time.Time) (agentInventory, error) {
@@ -114,6 +153,7 @@ func agentInventoryForPanesBoundedMode(ctx context.Context, panes []tmux.Pane, f
 	snapshot := loadAgentProcessSnapshotBounded(ctx, panes, budget)
 	annotations := loadAgentHookAnnotationsMode(ctx, panes, snapshot, now, readOnly, budget)
 	rows := agentRowsForPanes(panes, snapshot, annotations)
+	applyAgentOSC(rows, snapshot, budget)
 	var sessionColors map[string]string
 	var err error
 	if readOnly {
@@ -362,6 +402,7 @@ func agentPreviewRows(rows []agentRow, now time.Time) map[string]agentPreviewDat
 			Event:             row.rawEvent,
 			Reason:            row.reason,
 			Age:               age,
+			StateAge:          agentStateAge(row, now),
 			ExpiredHookReason: row.expiredHookReason,
 			ExpiredHookAge:    expiredAge,
 			Fresh:             row.fresh,
@@ -455,12 +496,13 @@ func agentPanesFromRows(rows []agentRow) []tmux.Pane {
 }
 
 func agentItemsForRows(rows []agentRow, currentPaneID string, sessionColors map[string]string, agentsConfig config.AgentsConfig, list bool) []picker.Item[menuItem] {
+	if list {
+		items, _ := agentPickerItemsForRows(rows, currentPaneID, sessionColors, agentsConfig, agentTerminalColumns())
+		return items
+	}
 	items := make([]picker.Item[menuItem], 0, len(rows))
 	for _, row := range rows {
 		label := agentPaneLabelWithConfig(row.pane, currentPaneID, row.status, row.name, sessionColorForPane(row.pane, sessionColors), agentsConfig)
-		if list {
-			label = agentListPaneLabelWithConfig(row.pane, currentPaneID, row.status, row.name, sessionColorForPane(row.pane, sessionColors), agentsConfig)
-		}
 		if count := len(row.children); count > 0 {
 			label += "  " + dim(fmt.Sprintf("+%d", count))
 		}
@@ -548,9 +590,9 @@ func agentItemsWithProcessSnapshotAndSessionColorsAndConfig(panes []tmux.Pane, c
 func agentPreviewWindow(terminalRows int) string {
 	size := "60%"
 	if terminalRows > 0 {
-		size = strconv.Itoa(max(5, terminalRows-agentVisibleResultRows-agentPickerNonResultRows))
+		size = strconv.Itoa(max(12, terminalRows-agentVisibleResultRows-agentPickerNonResultRows))
 	}
-	return strings.Join([]string{"down", size, "border-rounded", "wrap", "follow", "noinfo", "~1"}, ":")
+	return strings.Join([]string{"down", size, "border-rounded", "wrap", "follow", "noinfo", "~5"}, ":")
 }
 
 func agentTerminalRows() int {
@@ -620,10 +662,14 @@ func loadAgentSessionColorsBounded(ctx context.Context, panes []tmux.Pane, fallb
 }
 
 func sessionColorForPane(p tmux.Pane, colors map[string]string) string {
-	if color := colors[paneSessionKey(p)]; color != "" {
+	if color := colors[paneSessionKey(p)]; color != "" && color != "auto" {
 		return color
 	}
-	return config.DefaultSessionColor
+	// A hash gives a random-looking color that survives refreshes and restarts.
+	palette := [...]string{"red", "green", "yellow", "blue", "magenta", "cyan", "bright_red", "bright_green", "bright_yellow", "bright_blue", "bright_magenta", "bright_cyan", "orange"}
+	hash := fnv.New32a()
+	_, _ = hash.Write([]byte(p.SessionName))
+	return palette[int(hash.Sum32())%len(palette)]
 }
 
 func paneSessionKey(p tmux.Pane) string {
@@ -948,11 +994,13 @@ type processInfo struct {
 }
 
 type processSnapshot struct {
-	roots        map[int]bool
-	statuses     map[int]agentStatus
-	names        map[int]string
-	providerPIDs map[int]map[agentstatus.Provider]int
-	available    bool
+	parents       map[int]int
+	processStates map[int]string
+	roots         map[int]bool
+	statuses      map[int]agentStatus
+	names         map[int]string
+	providerPIDs  map[int]map[agentstatus.Provider]int
+	available     bool
 }
 
 func agentProcessSnapshotBounded(ctx context.Context, budget *tmux.OutputBudget, maxBytes int64) processSnapshot {
@@ -970,11 +1018,15 @@ func agentProcessSnapshotBounded(ctx context.Context, budget *tmux.OutputBudget,
 }
 
 func buildProcessSnapshot(processes []processInfo) processSnapshot {
+	parents := make(map[int]int)
+	processStates := make(map[int]string)
 	children := make(map[int][]int)
 	agents := make(map[int]string)
 	processByPID := make(map[int]processInfo)
 	for _, p := range processes {
 		processByPID[p.pid] = p
+		parents[p.pid] = p.ppid
+		processStates[p.pid] = p.state
 		children[p.ppid] = append(children[p.ppid], p.pid)
 		if name := processAgentName(p.command); name != "" {
 			agents[p.pid] = name
@@ -1048,7 +1100,7 @@ func buildProcessSnapshot(processes []processInfo) processSnapshot {
 	for _, p := range processes {
 		scan(p.pid)
 	}
-	return processSnapshot{roots: roots, statuses: statuses, names: names, providerPIDs: providerPIDs, available: true}
+	return processSnapshot{parents: parents, processStates: processStates, roots: roots, statuses: statuses, names: names, providerPIDs: providerPIDs, available: true}
 }
 
 func processLooksRunning(p processInfo) bool {

@@ -22,9 +22,10 @@ import (
 
 const appName = "tmux-menu"
 const configFileName = ".tmux-menu.conf"
-const DefaultSessionColor = "cyan"
-const SessionColorOptions = "default, black, red, green, yellow, blue, magenta, cyan, white, bright_black, bright_red, bright_green, bright_yellow, bright_blue, bright_magenta, bright_cyan, bright_white, orange"
-const AgentColorOptions = SessionColorOptions + ", dim"
+const DefaultSessionColor = "auto"
+const terminalColorOptions = "default, black, red, green, yellow, blue, magenta, cyan, white, bright_black, bright_red, bright_green, bright_yellow, bright_blue, bright_magenta, bright_cyan, bright_white, orange"
+const SessionColorOptions = "auto, " + terminalColorOptions
+const AgentColorOptions = terminalColorOptions + ", dim"
 
 const maxConfigFileBytes = 1 << 20
 
@@ -1069,7 +1070,7 @@ func validateAgentIcon(name string, value string, allowEmpty bool) error {
 }
 
 func validAgentColor(color string) bool {
-	return color == "dim" || validSessionColor(color)
+	return color == "dim" || color != "auto" && validSessionColor(color)
 }
 
 func validURLScheme(scheme string) bool {
@@ -1099,7 +1100,7 @@ func validateLinkAlternateKey(key string) error {
 
 func validSessionColor(color string) bool {
 	switch color {
-	case "default",
+	case "auto", "default",
 		"black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
 		"bright_black", "bright_red", "bright_green", "bright_yellow", "bright_blue", "bright_magenta", "bright_cyan", "bright_white",
 		"orange":
@@ -1168,11 +1169,12 @@ preview_width = "60%%"
 tab_order = ["palette", "agents", "tools", "projects", "status", "bookmarks", "docs"]
 
 [session]
+# Auto chooses a stable color per session name; explicit colors override it.
 # All supported session-name colors:
-# default, black, red, green, yellow, blue, magenta, cyan, white, orange,
+# auto, default, black, red, green, yellow, blue, magenta, cyan, white, orange,
 # bright_black, bright_red, bright_green, bright_yellow, bright_blue,
 # bright_magenta, bright_cyan, bright_white.
-color = "cyan"
+color = "auto"
 
 [agents]
 # Dedicated agents popup width; other views use popup.width.
@@ -1193,7 +1195,7 @@ waiting = "○"
 unknown = "?"
 
 [agents.colors]
-# Supports session colors listed above plus dim.
+# Supports explicit session colors listed above plus dim (not auto).
 codex = "blue"
 claude = "orange"
 other = "magenta"

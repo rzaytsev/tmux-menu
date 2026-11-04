@@ -16,6 +16,7 @@ import (
 type Item[T any] struct {
 	Label    string
 	Preview  string
+	Metadata string
 	Disabled bool
 	Value    T
 }
@@ -24,12 +25,18 @@ type Result[T any] struct {
 	Key      string
 	Value    T
 	Selected bool
+	Metadata string
 }
 
 type Options struct {
-	PreviewWindow string
-	Bindings      []string
-	InitialIndex  int
+	Header         string
+	InputHeader    []string
+	Input          string
+	LiveCommand    string
+	RefreshCommand string
+	PreviewWindow  string
+	Bindings       []string
+	InitialIndex   int
 }
 
 var ErrCanceled = errors.New("selection canceled")
@@ -61,8 +68,86 @@ func SelectWithExpectAndPreviewOptions[T any](ctx context.Context, prompt string
 	if len(items) == 0 && len(expectKeys) == 0 {
 		return Result[T]{}, ErrCanceled
 	}
-	var input strings.Builder
 	hasPreview := strings.TrimSpace(previewCommand) != ""
+	input, err := EncodeItems(items, hasPreview)
+	if err != nil {
+		return Result[T]{}, err
+	}
+	var header strings.Builder
+	for _, line := range options.InputHeader {
+		prefix := "\t"
+		if hasPreview {
+			prefix = "\t\t"
+		}
+		fmt.Fprintln(&header, prefix+displaytext.Line(line))
+	}
+	args := buildFZFArgs(prompt, expectKeys, footer, previewCommand, options)
+	state := StateFromContext(ctx)
+	if options.Input != "" {
+		input, header = options.Input, strings.Builder{}
+	}
+	if state != nil {
+		args = append(args, "--print-query", "--query", state.Query)
+		positionInput := input
+		if options.LiveCommand == "" && state.Query != "" && state.Selected != "" {
+			fields := "2.."
+			if hasPreview {
+				fields = "3.."
+			}
+			positionInput, err = Filter(ctx, input, state.Query, fields, false)
+			if err != nil {
+				return Result[T]{}, err
+			}
+		}
+		lines := strings.Split(strings.TrimSuffix(positionInput, "\n"), "\n")
+		if options.Input != "" && len(lines) >= len(options.InputHeader) {
+			lines = lines[len(options.InputHeader):]
+		}
+		for i, item := range items {
+			if state.Selected != "" && state.Selected == itemStateKey(item) {
+				for position, line := range lines {
+					id, _, _ := strings.Cut(line, "\t")
+					if id == strconv.Itoa(i) {
+						args = append(args, "--bind", fmt.Sprintf("load:pos(%d)+unbind(load)", position+1))
+						break
+					}
+				}
+				break
+			}
+		}
+	}
+	cmd := exec.CommandContext(ctx, "fzf", args...)
+	cmd.Stdin = strings.NewReader(header.String() + input)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return Result[T]{}, classifyFZFError(err, stderr.String())
+	}
+	output := string(out)
+	if state != nil {
+		var ok bool
+		state.Query, output, ok = strings.Cut(output, "\n")
+		if !ok {
+			return Result[T]{}, fmt.Errorf("missing fzf query output")
+		}
+	}
+	result, err := parseFZFOutput(output, items, len(expectKeys) > 0)
+	if state != nil && result.Selected {
+		line := output
+		if len(expectKeys) > 0 {
+			_, line, _ = strings.Cut(line, "\n")
+		}
+		id, _, _ := strings.Cut(line, "\t")
+		index, _ := strconv.Atoi(id)
+		state.Selected = itemStateKey(items[index])
+	}
+	return result, err
+}
+
+// EncodeItems keeps opaque selection metadata outside visible labels.
+func EncodeItems[T any](items []Item[T], hasPreview bool) (string, error) {
+	var input strings.Builder
 	if len(items) == 0 {
 		if hasPreview {
 			fmt.Fprintf(&input, "%d\t\tNo items\n", emptyItemID)
@@ -73,23 +158,21 @@ func SelectWithExpectAndPreviewOptions[T any](ctx context.Context, prompt string
 	for i, item := range items {
 		if hasPreview {
 			if strings.ContainsFunc(item.Preview, displaytext.UnsafeControl) {
-				return Result[T]{}, fmt.Errorf("item %d preview contains unsupported control characters", i)
+				return "", fmt.Errorf("item %d preview contains unsupported control characters", i)
 			}
-			fmt.Fprintf(&input, "%d\t%s\t%s\n", i, item.Preview, displaytext.Line(item.Label))
+			if strings.ContainsFunc(item.Metadata, displaytext.UnsafeControl) {
+				return "", fmt.Errorf("item %d metadata contains unsupported control characters", i)
+			}
+			fmt.Fprintf(&input, "%d\t%s\t%s", i, item.Preview, displaytext.Line(item.Label))
+			if item.Metadata != "" {
+				fmt.Fprintf(&input, "\t%s", item.Metadata)
+			}
+			input.WriteByte('\n')
 			continue
 		}
 		fmt.Fprintf(&input, "%d\t%s\n", i, displaytext.Line(item.Label))
 	}
-	args := buildFZFArgs(prompt, expectKeys, footer, previewCommand, options)
-	cmd := exec.CommandContext(ctx, "fzf", args...)
-	cmd.Stdin = strings.NewReader(input.String())
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		return Result[T]{}, classifyFZFError(err, stderr.String())
-	}
-	return parseFZFOutput(string(out), items, len(expectKeys) > 0)
+	return input.String(), nil
 }
 
 func classifyFZFError(err error, stderr string) error {
@@ -128,6 +211,19 @@ func buildFZFArgs(prompt string, expectKeys []string, footer string, previewComm
 	if footer != "" {
 		args = append(args, "--footer", footer)
 	}
+	if options.Header != "" {
+		args = append(args, "--header", displaytext.Line(options.Header))
+	}
+	if len(options.InputHeader) > 0 {
+		args = append(args, "--header-lines", strconv.Itoa(len(options.InputHeader)))
+	}
+	if options.LiveCommand != "" {
+		idleRefresh := `if [ "${FZF_IDLE_TIME_MS:-0}" -ge 500 ]; then ` + options.RefreshCommand + `; fi`
+		args = append(args, "--disabled", "--id-nth", "1", "--no-sort", "--with-nth", "3",
+			"--bind", "change:bg-cancel+untrack-current+reload("+options.LiveCommand+")",
+			"--bind", "every(2):bg-transform:"+idleRefresh,
+			"--bind", "resize:bg-cancel+bg-transform:"+options.RefreshCommand)
+	}
 	if hasPreview {
 		args = append(args, "--preview", previewCommandForField(previewCommand, "{s2}"))
 	}
@@ -135,7 +231,7 @@ func buildFZFArgs(prompt string, expectKeys []string, footer string, previewComm
 		args = append(args, "--preview-window", options.PreviewWindow)
 	}
 	if options.InitialIndex > 0 {
-		args = append(args, "--bind", fmt.Sprintf("load:pos(%d)", options.InitialIndex+1))
+		args = append(args, "--bind", fmt.Sprintf("load:pos(%d)+unbind(load)", options.InitialIndex+1))
 	}
 	for _, binding := range options.Bindings {
 		if strings.TrimSpace(binding) == "" {
@@ -198,5 +294,9 @@ func parseFZFOutput[T any](out string, items []Item[T], expect bool) (Result[T],
 		}
 		return Result[T]{}, ErrCanceled
 	}
-	return Result[T]{Key: key, Value: items[id].Value, Selected: true}, nil
+	metadata := ""
+	if fields := strings.Split(line, "\t"); len(fields) >= 4 {
+		metadata = fields[3]
+	}
+	return Result[T]{Key: key, Value: items[id].Value, Selected: true, Metadata: metadata}, nil
 }

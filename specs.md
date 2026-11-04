@@ -39,6 +39,7 @@ tmux-menu links
 tmux-menu bookmarks
 tmux-menu status
 tmux-menu validate-config [config ...]
+tmux-menu agent-run <codex|claude> [agent arguments...]
 tmux-menu agent-hook doctor
 tmux-menu agent-hook snapshot
 tmux-menu agent-hook snippets [codex|claude] [ingest|trace]
@@ -157,7 +158,8 @@ The picker uses ANSI colors through `fzf --ansi`:
 - other row kinds: blue
 - palette session and project names: cyan + bold
 - agent session labels: bold, using that session root's configured
-  `[session].color` (cyan by default); named options cover terminal default,
+  `[session].color` (`auto` by default, a stable color hashed from the session
+  name); explicit global or local colors override it. Named options cover terminal default,
   the normal and bright ANSI palettes, and orange
 - ordinary pane commands: green
 - remote commands such as `mosh` and `ssh`: yellow
@@ -169,6 +171,21 @@ The picker uses ANSI colors through `fzf --ansi`:
 All views use `fzf --ansi`; popup view switching uses `fzf --expect`.
 
 ## Agents Mode
+
+OSC 7501 is an opt-in additional evidence source for agents launched with
+`agent-run <codex|claude> [args...]`. A PTY wrapper answers capability queries
+before forwarding subsequent terminal queries, consumes native status, and
+passes other traffic through. Only the exact live pane/wrapper/child/provider
+process tree may use its metadata. The shared picker/preview/snapshot projection
+uses source `osc7501`; native working/blocked does not expire due to silence.
+State mapping and aggregate precedence are documented in
+[usage](docs/usage.md#osc-7501-status-through-tmux). Native evidence takes
+precedence, except idle preserves a hook completion following the latest native
+work. Native completed has no hook acknowledgement token. Root/child clear,
+shell-prompt lifetimes and RIS are supported. Metadata retains no free-text
+messages, titles, terminal traffic or model prose. Existing sessions and hooks
+are not reconfigured. Live pane inventory still owns row existence.
+
 
 `agents` and `agents --picker` open the same fzf Agents picker. The popup forms
 accept the same optional compatibility flag. The dashboard is removed. Tab and
@@ -183,21 +200,44 @@ Snapshot v1 adds server fingerprint, session/window IDs, pane PID and optional
 provider session ID. Consumers must not join conversations by pane ID alone.
 Export reads are bounded to two seconds and never reconcile hook records.
 
-Rows show the configured provider/status icons, session, thread, and workdir.
+Rows use aligned STATUS, AGENT, SESSION, AGE, THREAD, WORKDIR, and REASON columns
+under a pinned, non-selectable summary and header. Status/provider cells include configured icons
+and readable names. Widths use terminal cells, ignoring ANSI colors; long fields
+truncate with an ellipsis to fit; matching uses full semantic fields through
+fzf's matcher before presentation. Resize events recalculate widths.
+The current-pane marker and child count remain beside the thread title.
 They sort by attention, working, completed, waiting, and unknown, with recent
 hook evidence first within a status. `Ctrl-R` rebuilds the inventory and retains
 the selected stable pane ID when it still exists. The list reserves 15 result
 rows when space allows; smaller terminals keep at least five preview content
-rows. List discovery, ordering, icons, and acknowledgement tokens refresh manually.
+rows. Discovery and urgency sorting refresh manually; live metadata updates
+every two seconds while idle, preserving the frozen order and exact pane/provider
+incarnation. Changed, missing, or ambiguous identities cannot become new targets.
+Rendered rows carry their own exact completion token and current safe workdir.
 Typing filters the list; Enter switches and Esc exits. `Ctrl-X` acknowledges only
 the selected exact completion token and never approves agent input.
 
-The preview snapshot freezes the rendered pane identity. The fzf
-`every(2):refresh-preview` binding refreshes only the selected pane's status,
-evidence, and scrollback every two seconds, preserving the query and selection.
-This requires fzf 0.73.0 or newer. Preview metadata reads are bounded and use
+The summary counts attention, working, completed, waiting, and unknown across
+the frozen generation. `Ctrl-A` toggles attention, `Ctrl-D` toggles completed,
+and `Ctrl-S` independently toggles the origin session; filters combine with the
+query. `Ctrl-Y` copies the full selected workdir. AGE uses hook StateChangedAt,
+never progress/observation timestamps; unsupported timing sources show `—`.
+REASON shows attention reasons. Each view retains its query and selected target
+through refresh and switching, including popup relaunches. State is private,
+bounded, temporary, and deleted at popup exit.
+
+The preview snapshot freezes the rendered pane identity. fzf reloads live rows
+through read-only inventory every two seconds while idle, tracking stable IDs;
+typing uses untracked query reloads so input remains responsive. The selected
+preview refreshes status, evidence, and scrollback on the same idle cadence.
+Inventory preparation runs as a cancellable background action; tracking loads
+only a completed private row file. Query changes cancel pending background work.
+This requires fzf 0.74.5 or newer. Preview metadata reads are bounded and use
 read-only hook lookup; polling cannot renew leases or reconcile hook records.
-One colored line stays pinned above scrollback: provider, status, freshness,
+Five logical lines stay pinned above scrollback: one colored status/evidence
+line, full thread title, full workdir, read-only Git branch or detached commit,
+and session/state age. Detail lines wrap; Git reads have a 250 ms deadline and
+4 KiB output budget, with `—` on failure. The first line combines provider, status, freshness,
 available hook age, then status evidence. Provider and state use configured
 agent colors; source is cyan, freshness/age/separators dim, and stale or expired
 evidence yellow. Hook reason takes precedence over its raw event name. The
@@ -484,7 +524,7 @@ preview_width = "60%"
 tab_order = ["palette", "agents", "tools", "projects", "status", "bookmarks", "docs"]
 
 [session]
-color = "cyan"
+color = "auto"
 
 [agents]
 popup_width = "100%"

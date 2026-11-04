@@ -537,7 +537,7 @@ func TestAgentPreviewRefreshesEvidenceThenPrintsTrimmedLiveScrollback(t *testing
 		t.Fatal(err)
 	}
 	got := stripANSI(out.String())
-	if !strings.HasPrefix(got, "claude · attention · fresh · 2s · hook: permission\nSession: session-12345678\n") {
+	if !strings.HasPrefix(got, "claude · attention · fresh · 2s · hook: permission\nThread: ") {
 		t.Fatalf("preview header = %q", got)
 	}
 	if !strings.Contains(got, "Child: worker | working\n\nline one\n\nline two\n") || strings.HasSuffix(got, "\n\n") {

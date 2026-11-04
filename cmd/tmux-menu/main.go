@@ -38,6 +38,10 @@ func init() {
 
 func main() {
 	if err := run(context.Background(), os.Args[1:]); err != nil {
+		var exit agentExitError
+		if errors.As(err, &exit) {
+			os.Exit(exit.code)
+		}
 		fmt.Fprintln(os.Stderr, "tmux-menu:", displaytext.Line(err.Error()))
 		os.Exit(1)
 	}
@@ -76,6 +80,8 @@ func run(ctx context.Context, args []string) error {
 		}
 		fmt.Printf("config valid: %s\n", strings.Join(paths, ", "))
 		return nil
+	case "agent-run":
+		return runAgentCommand(ctx, args[1:])
 	case "agent-hook":
 		return runAgentHook(ctx, args[1:])
 	case "sample-config":
@@ -111,6 +117,7 @@ Usage:
   tmux-menu docs
   tmux-menu status
   tmux-menu validate-config [config ...]
+  tmux-menu agent-run <codex|claude> [agent arguments...]
   tmux-menu agent-hook ingest <codex|claude>
   tmux-menu agent-hook trace <codex|claude>
   tmux-menu agent-hook doctor
@@ -147,6 +154,12 @@ func runPopup(ctx context.Context, args []string) error {
 	dispatchPath := dispatchFile.Name()
 	_ = dispatchFile.Close()
 	defer os.Remove(dispatchPath)
+	stateFile, err := os.OpenFile(dispatchPath+".picker-state.json", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	_ = stateFile.Close()
+	defer os.Remove(dispatchPath + ".picker-state.json")
 	exe, err := os.Executable()
 	if err != nil {
 		return err
@@ -236,6 +249,7 @@ func popupViewNeedsRelaunch(cfg config.Config, currentMode, nextMode string) boo
 func buildPopupCommand(exe, dispatchPath string, rt runtimeContext, args []string) string {
 	parts := []string{
 		"TMUX_MENU_DISPATCH_FILE=" + shellquote.Quote(dispatchPath),
+		"TMUX_MENU_PICKER_STATE_FILE=" + shellquote.Quote(dispatchPath+".picker-state.json"),
 		"TMUX_MENU_ORIGIN_PANE=" + shellquote.Quote(rt.OriginPane),
 		"TMUX_MENU_ORIGIN_PATH=" + shellquote.Quote(rt.OriginPath),
 		"TMUX_MENU_SESSION_ID=" + shellquote.Quote(rt.SessionID),
@@ -312,14 +326,43 @@ func validViewMode(mode string) bool {
 }
 
 func runPickerLoop(ctx context.Context, mode string) error {
+	state, err := loadPickerLoopState()
+	if err != nil {
+		return err
+	}
+	ctx = context.WithValue(ctx, pickerLoopStateKey{}, state)
 	initialAgentPaneID := ""
 	for {
-		result, err := selectModeForLoop(ctx, mode, initialAgentPaneID)
+		if state.Views[mode] == nil {
+			state.Views[mode] = &picker.State{}
+		}
+		result, err := selectModeForLoop(picker.WithState(ctx, state.Views[mode]), mode, initialAgentPaneID)
 		if errors.Is(err, picker.ErrCanceled) {
 			return nil
 		}
 		if err != nil {
 			return err
+		}
+		if mode == "agents" {
+			switch result.Key {
+			case "ctrl-a", "ctrl-d":
+				filter := "attention"
+				if result.Key == "ctrl-d" {
+					filter = "completed"
+				}
+				if state.AgentFilter == filter {
+					filter = ""
+				}
+				state.AgentFilter = filter
+			case "ctrl-s":
+				state.SessionOnly = !state.SessionOnly
+			}
+		}
+		if err := savePickerLoopState(state); err != nil {
+			return err
+		}
+		if mode == "agents" && (result.Key == "ctrl-a" || result.Key == "ctrl-d" || result.Key == "ctrl-s") {
+			continue
 		}
 		if mode == "agents" && (result.Key == "ctrl-r" || result.Key == "ctrl-x") {
 			if result.Selected && result.Value.agentPaneID != "" {

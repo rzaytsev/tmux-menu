@@ -70,6 +70,7 @@ type agentPreviewData struct {
 	Event             string   `json:"event,omitempty"`
 	Reason            string   `json:"reason,omitempty"`
 	Age               string   `json:"age,omitempty"`
+	StateAge          string   `json:"state_age,omitempty"`
 	ExpiredHookReason string   `json:"expired_hook_reason,omitempty"`
 	ExpiredHookAge    string   `json:"expired_hook_age,omitempty"`
 	Fresh             bool     `json:"fresh"`
@@ -77,9 +78,16 @@ type agentPreviewData struct {
 }
 
 type agentPreviewSnapshot struct {
-	Version int                         `json:"version"`
-	Rows    map[string]agentPreviewData `json:"rows"`
-	Colors  config.AgentColorsConfig    `json:"colors"`
+	Version       int                         `json:"version"`
+	Rows          map[string]agentPreviewData `json:"rows"`
+	Colors        config.AgentColorsConfig    `json:"colors"`
+	Order         []string                    `json:"order,omitempty"`
+	ProviderPIDs  map[string]int              `json:"provider_pids,omitempty"`
+	OriginPane    string                      `json:"origin_pane,omitempty"`
+	OriginSession string                      `json:"origin_session,omitempty"`
+	Filter        string                      `json:"filter,omitempty"`
+	SessionOnly   bool                        `json:"session_only,omitempty"`
+	Agents        config.AgentsConfig         `json:"agents,omitempty"`
 }
 
 // runAgentHook is the command handler routed by run for the agent-hook family.
@@ -123,6 +131,16 @@ func runAgentHook(ctx context.Context, args []string) error {
 			return fmt.Errorf("agent-hook preview requires snapshot path and pane ID")
 		}
 		return runAgentPreview(ctx, args[1], args[2], os.Stdout)
+	case "picker-rows":
+		if len(args) != 4 {
+			return fmt.Errorf("agent-hook picker-rows requires snapshot, columns, and query")
+		}
+		return runAgentPickerRows(ctx, args[1], args[2], args[3], os.Stdout)
+	case "picker-refresh":
+		if len(args) != 4 {
+			return fmt.Errorf("agent-hook picker-refresh requires snapshot, columns, and query")
+		}
+		return runAgentPickerRefresh(ctx, args[1], args[2], args[3], os.Stdout)
 	default:
 		return fmt.Errorf("unknown agent-hook command %q: %w", args[0], agentHookUsageError())
 	}
@@ -868,8 +886,7 @@ func runAgentPreview(ctx context.Context, snapshotPath, paneID string, out io.Wr
 		printAgentPreviewHeader(out, agentPreviewData{State: "unavailable", Source: "pane changed or unavailable; Ctrl-R to refresh"}, colors)
 		return nil
 	}
-	// Refresh only the selected pane. Keep the rendered list and its exact
-	// acknowledgement tokens frozen until the user explicitly refreshes it.
+	// The snapshot freezes identity; status reads never renew hook leases.
 	current := agentPreviewLoadRow(ctx, pane)
 	captured, err := agentHookTmuxOutput(ctx, "capture-pane", "-e", "-p", "-S", "-"+strconv.Itoa(agentPreviewCaptureLines), "-t", paneID)
 	if _, live := agentPreviewLivePane(ctx, paneID, row); !live {
@@ -877,7 +894,16 @@ func runAgentPreview(ctx context.Context, snapshotPath, paneID string, out io.Wr
 		return nil
 	}
 	var header bytes.Buffer
-	printAgentPreviewHeader(&header, current, colors)
+	statusLine := current
+	statusLine.ProviderSession, statusLine.Children = "", nil
+	printAgentPreviewHeader(&header, statusLine, colors)
+	printAgentSelectionDetails(ctx, &header, pane, current)
+	if current.ProviderSession != "" {
+		fmt.Fprintln(&header, displaytext.Line("Conversation: "+boundedOpaqueID(current.ProviderSession)))
+	}
+	for _, child := range current.Children {
+		fmt.Fprintln(&header, displaytext.Line("Child: "+child))
+	}
 	fmt.Fprint(out, displaytext.Block(header.String()))
 	if err != nil {
 		fmt.Fprintln(out, "\n[scrollback unavailable]")
@@ -898,6 +924,7 @@ func loadAgentPreviewRow(ctx context.Context, pane tmux.Pane) agentPreviewData {
 	processes := loadAgentProcessSnapshotBounded(ctx, panes, budget)
 	annotations := loadAgentHookAnnotationsMode(ctx, panes, processes, now, true, budget)
 	rows := agentRowsForPanes(panes, processes, annotations)
+	applyAgentOSC(rows, processes, budget)
 	if len(rows) == 1 {
 		return agentPreviewRows(rows, now)[pane.PaneID]
 	}

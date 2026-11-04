@@ -119,6 +119,41 @@ func TestBuildFZFArgsPositionsInitialSelection(t *testing.T) {
 	}
 }
 
+func TestPickerPreservesQueryAndSelectionAcrossReorderedRows(t *testing.T) {
+	writeFakeFZF(t, "if [ \"$1\" = --filter ]; then /bin/cat; exit; fi\nprintf 'long query\\nctrl-r\\n1\\t%%2\\tsecond\\texact-token\\n'\n")
+	state := &State{Query: "previous query", Selected: "%2"}
+	ctx := WithState(t.Context(), state)
+	items := []Item[string]{{Label: "first", Preview: "%1", Value: "first"}, {Label: "second", Preview: "%2", Value: "second"}}
+	result, err := SelectWithExpectAndPreview(ctx, "agents> ", items, []string{"ctrl-r"}, "", "preview")
+	if err != nil || result.Value != "second" || result.Metadata != "exact-token" || state.Query != "long query" || state.Selected != "%2" {
+		t.Fatalf("result=%+v state=%+v error=%v", result, state, err)
+	}
+	writeFakeFZF(t, "if [ \"$1\" = --filter ]; then /bin/cat; exit; fi\nprintf '%s\\n' \"$@\" > \"$PICKER_ARGS\"\nprintf 'long query\\nctrl-r\\n0\\t%%2\\tsecond\\n'\n")
+	path := filepath.Join(t.TempDir(), "args")
+	t.Setenv("PICKER_ARGS", path)
+	items[0], items[1] = items[1], items[0]
+	if _, err := SelectWithExpectAndPreview(ctx, "agents> ", items, []string{"ctrl-r"}, "", "preview"); err != nil {
+		t.Fatal(err)
+	}
+	args, _ := os.ReadFile(path)
+	if !strings.Contains(string(args), "--query\nlong query") || !strings.Contains(string(args), "load:pos(1)+unbind(load)") {
+		t.Fatalf("query or stable selection lost: %s", args)
+	}
+}
+
+func TestBuildFZFArgsKeepsColumnHeaderSeparateFromSelectableItems(t *testing.T) {
+	args := buildFZFArgs("agents> ", nil, "", "preview", Options{Header: "STATUS\nSESSION\x1b]52;c;secret\a"})
+	for i, arg := range args {
+		if arg == "--header" {
+			if !strings.Contains(args[i+1], "STATUS SESSION") || strings.Contains(args[i+1], "secret") || strings.ContainsAny(args[i+1], "\n\a") {
+				t.Fatalf("unsafe header: %q", args[i+1])
+			}
+			return
+		}
+	}
+	t.Fatal("missing pinned header")
+}
+
 func TestSelectWithExpectReturnsMissingFZFError(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 

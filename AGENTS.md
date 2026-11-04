@@ -16,10 +16,11 @@ Work directly and keep changes small. This is a local tmux utility, not a framew
 ## Current Behavior
 
 - `palette`: configured sections from `palette.sections`; default sessions, then panes. No window rows.
-- `agents`: fzf picker with status icons and a selected-pane preview; status
-  and evidence share one colored line pinned above scrollback. `agents --picker` is a compatible
-  alias. Show 15 result rows when space allows and refresh only the selected
-  preview every two seconds. Ctrl-R rebuilds the list; the dashboard is removed.
+- `agents`: fzf columns, summary, attention/session/completed filters, and a
+  selected-pane preview with full thread/workdir/Git details. `agents --picker`
+  is a compatible alias. Show 15 result rows when space allows. Refresh row
+  metadata and the selected preview every two seconds while idle, preserving
+  order, query, selection, and exact row identity. Ctrl-R rediscovers and reorders.
 - `tools`: configured commands, dynamic Makefile targets from the session root/current dir, and quick dirs.
 - `projects`: lists one-level directories under `projects.roots`, creates/switches tmux sessions natively, and shows whether the configured bootstrap file exists.
 - `links`: captures origin pane scrollback, extracts URL schemes configured by `links.url_schemes` (default HTTP, HTTPS, Slack, and Telegram) plus Jira issue keys when the session-local `links.jira_base_url` is set, copies selected targets, opens file refs through configured `links.open`, opens URLs with `open`, and supports a configured alternate opener.
@@ -42,6 +43,10 @@ Work directly and keep changes small. This is a local tmux utility, not a framew
 - Live tmux panes own agent row existence. Fresh hook evidence may annotate only
   an exact server/pane/PID/session/provider-session/provider-process incarnation
   and must never create a row by itself.
+- `agent-run <codex|claude> [args...]` is the opt-in OSC 7501 PTY receiver.
+  Preserve non-protocol terminal traffic and capability-reply ordering. OSC
+  metadata uses a separate event-based store, never hook TTLs or model prose.
+  Require live pane/wrapper/child/provider ancestry before projection.
 - Normalize hook state to `attention`, `working`, `completed`, `waiting`, and
   `unknown`. Stop means response completion, not task success; working is a
   renewable lease; polling never renews it.
@@ -56,10 +61,13 @@ Work directly and keep changes small. This is a local tmux utility, not a framew
 - Keep one shared semantic inventory projection for picker and snapshot;
   view-specific order and terminal content stay outside it.
 - The selected-agent preview freezes pane identity for its picker generation.
-  Use fzf `every(2):refresh-preview` to update its status and scrollback without
-  rebuilding the list or changing the query/selection. Use read-only hook
+  Use fzf timed reloads with field-based identity tracking for live row metadata,
+  preserving query, selection, and row order; only manual refresh rediscovers
+  and reorders. Do not enable tracking on query reloads, which can drop typing.
+  Preserve exact rendered acknowledgement tokens. Use read-only hook
   lookups; polling must not renew leases or reconcile hook records. Pin status
-  and evidence in one colored line, truncated to the preview width. Reuse
+  and evidence in one colored line, truncated to the preview width; pin full
+  thread/workdir, read-only Git metadata, and session/state age beneath it. Reuse
   configured provider/status colors. Expired hook reasons are historical only.
 - Bound terminal capture and revalidate the exact live pane identity before and
   after capture. Sanitize captured terminal content, labels, icons, and errors;

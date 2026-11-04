@@ -8,17 +8,30 @@ without leaving the keyboard.
 Status can also act as a cross-project radar: configured session reporters
 produce urgency-sorted rows with a fixed right-side block preview.
 Manually named tmux windows are shown alongside each pane's own title.
-The Agents view is a single fzf picker with status icons and a selected-pane
-preview. `agents` and `agents --picker` open the same interface; the dashboard
+The Agents view is a single fzf picker with aligned STATUS, AGENT, SESSION,
+AGE, THREAD, WORKDIR, and REASON columns, a pinned summary, and a selected-pane
+preview with full thread/workdir details and the Git branch. Search matches full
+titles and paths even when columns truncate. Queries and selection survive
+refresh and view switching for the lifetime of the popup.
+Unconfigured session names get stable automatic colors; `[session].color`
+overrides them. `agents` and `agents --picker` open the same interface; the dashboard
 has been removed. Every switch revalidates the exact tmux session, window, pane,
 and pane-process identity before dispatch. One colored line stays pinned above
 the preview, combining provider, status, age, and hook/title/process evidence.
 Expired hook evidence stays visibly historical; Claude MCP elicitation dialogs
-are marked as needing attention. The selected preview refreshes status and
-scrollback every two seconds. The list shows 15 rows when space allows; press
-`Ctrl-R` to refresh its rows and status icons.
+are marked as needing attention. Rows and the selected preview refresh every
+two seconds while idle without reordering agents. The list shows 15 rows when
+space allows; `Ctrl-R` rediscovers and reorders agents. `Ctrl-A` filters attention,
+`Ctrl-S` toggles the current session, `Ctrl-D` filters completed, and `Ctrl-Y`
+copies the selected workdir. AGE uses trusted hook transitions, otherwise `—`.
 Codex's live idle title overrides a leftover parent working hook, so a missing
 completion event cannot keep an idle agent showing as working.
+Start new Codex/Claude sessions with `tmux-menu agent-run codex` or
+`tmux-menu agent-run claude` to receive OSC 7501 status through tmux. The
+wrapper answers capability probes, forwards the terminal, and labels native
+evidence `osc7501` in Agents and JSON snapshots. Existing hooks remain useful
+for conversation identity and Codex completion. See
+[OSC 7501 setup and testing](docs/usage.md#osc-7501-status-through-tmux).
 The read-only `agent-hook snapshot` export includes exact conversation and tmux
 identity metadata for notification inboxes that display current agent state.
 Agent marks, status icons, and colors remain configurable through
@@ -37,7 +50,7 @@ target, document path, or task path without opening it.
 
 - Go
 - tmux
-- fzf 0.73.0 or newer (for timed preview refresh)
+- fzf 0.74.5 or newer (for identity tracking across live reloads)
 - macOS `open`/`pbcopy` for the default URL and clipboard actions
 - optional: `glow` for task and document previews
 

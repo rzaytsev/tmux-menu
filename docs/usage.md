@@ -68,6 +68,97 @@ For a configured command with `title = "dash"`, bind prefix + d in tmux:
 bind d run-shell "~/.local/bin/tmux-menu tools dash"
 ```
 
+### OSC 7501 status through tmux
+
+Start an agent from its intended tmux pane:
+
+```sh
+tmux-menu agent-run codex
+tmux-menu agent-run claude
+# All following arguments go directly to that provider:
+tmux-menu agent-run codex resume
+tmux-menu agent-run claude --resume
+```
+
+This is opt-in for newly launched sessions. No shell aliases, provider hooks,
+tmux configuration, or existing sessions are changed. Run the provider directly
+to bypass the wrapper. `agent-run` requires an interactive Unix terminal and
+verifies that it actually descends from the tmux pane it claims.
+
+The wrapper creates a PTY and consumes OSC 7501 before tmux can discard it. It
+answers the capability probe locally, before forwarding a following DA query;
+this enables Claude's native reporting inside tmux. Other terminal output and
+keyboard input pass through, window-size changes reach the inner PTY, and the
+provider's exit status is preserved. Ctrl-Z suspends the wrapper and child;
+`fg` resumes them and restores terminal input. Neither tmux OSC support nor passthrough
+configuration is required for collection.
+
+The Agents picker, its two-second preview refresh, and `agent-hook snapshot`
+share the same status projection. The native source is `osc7501`:
+
+| Native state | Agents state |
+| --- | --- |
+| `idle` | `waiting` |
+| `working` | `working` |
+| `blocked` | `attention`, with permission/question/auth reason |
+| `done` | `completed` (a response finished; not proof the task succeeded) |
+| `error` | `attention`, with error reason |
+| `clear` | Remove the addressed subtree; use remaining records or fallbacks |
+
+Records aggregate in this order: blocked, error, working, done, idle. Child
+records can therefore keep an idle parent visibly active or blocked. Unlike
+hook leases, native status has no quiet-time expiry. Working/blocked records
+clear on an observed shell prompt or provider exit; full terminal reset clears
+all records. Done/error records remain in metadata after exit, but only live
+agent panes appear in the picker. A restarted provider must establish a new
+wrapper/child process identity before native evidence can apply.
+
+Native reports override title/process heuristics and hook state. Codex's native
+implementation reports idle instead of done: a hook completion that follows the
+latest native work keeps its existing completion badge and exact Ctrl-X token.
+Native `done` is cleared by the application's next status report; Ctrl-X still
+acknowledges only hook completion tokens. Keep provider hooks configured for
+conversation identity, completion, and sessions started without the wrapper.
+
+Storage contains classified status, ids, progress and process identity only.
+Messages and titles are validated and discarded; terminal content, prompts,
+and model prose never enter OSC state or snapshot JSON. Reports are limited to
+4096 bytes and 64 records per wrapped terminal. Snapshot reads require the exact
+live pane, wrapper, child and provider process ancestry and do not renew state.
+
+To test manually:
+
+1. Start `tmux-menu agent-run claude` in one tmux pane. In another, run
+   `tmux-menu popup agents`; select it and look for `osc7501` in its preview.
+2. Submit a harmless request. Expect working while it runs and completed or
+   waiting afterward. Cancel a running turn with Escape and check that the
+   native status returns to waiting instead of retaining a working hook lease.
+3. Exercise a real permission or question prompt and expect attention. Resolve
+   or cancel it and check that attention clears. Completion and dialog behavior
+   depend on the installed provider's reports.
+4. Repeat with `tmux-menu agent-run codex`. Its completed badge may cite hook
+   evidence, as explained above. Rows and the selected preview refresh every two
+   seconds while idle; Ctrl-R also discovers new agents and reorders the list.
+5. For machine-readable confirmation, run `tmux-menu agent-hook snapshot` from
+   another pane in the same tmux server and inspect that pane's `source` and
+   `status`. Exit the agent and verify that its row disappears.
+
+An automated acceptance test uses an isolated tmux server and a synthetic
+provider, without attaching a client, switching your panes, or making API calls:
+
+```sh
+GOCACHE=/tmp/tmux-menu-go-build make build
+GOCACHE=/tmp/tmux-menu-go-build python3 scripts/test-osc7501.py
+# Test an installed binary instead:
+GOCACHE=/tmp/tmux-menu-go-build python3 scripts/test-osc7501.py "$HOME/.local/bin/tmux-menu"
+```
+
+It checks capability ordering, root/child state transitions, clear/reset,
+keyboard input, suspension/resume, resizing, process exit, and shared JSON projection. It requires
+Go, tmux and permission to open PTYs and tmux sockets. It does not establish
+real-provider approval/cancellation behavior or visual acceptance in your
+terminal application.
+
 Optional identity-bound provider metadata:
 
 ```sh
@@ -90,6 +181,36 @@ two-second deadline and do not reconcile or renew stored hook state.
 `agents` and `agents --picker` open the same fzf picker, including their `popup`
 forms. The dashboard has been removed. Existing bindings need no changes.
 
+Rows use aligned STATUS, AGENT, SESSION, AGE, THREAD, WORKDIR, and REASON columns
+under a pinned summary and header. Status and agent columns show icons and names.
+Long fields truncate, but searches match full titles, session names, paths, and
+reasons. Resizing recalculates column widths. The current-pane marker stays
+beside the thread title, and `+N` shows child agents there.
+
+AGE means time in the current state, based on a trusted hook transition; renewed
+working leases do not reset it. Title/process observations and OSC event times
+cannot establish a transition and show `—`. REASON explains attention using the
+hook/native reason, or `input required` for title-based attention.
+
+The summary counts each state across this picker generation. `Ctrl-A` toggles
+attention, `Ctrl-D` toggles completed, and `Ctrl-S` independently toggles the
+origin tmux session. Press a filter shortcut again to clear it. Filters combine
+with the text query; empty results retain navigation and filter shortcuts.
+`Ctrl-Y` copies the selected agent's full working directory and closes the picker.
+
+Rows update in their original order every two seconds while idle. Updates pause
+while typing; the query and selected pane remain stable. `Ctrl-R` discovers new
+agents and sorts by urgency again. Exited or changed pane/provider incarnations
+disappear rather than becoming new targets. Refresh and view switching retain
+each view's own query and selected target, including popup width changes. This
+state lasts only for the current popup and is removed when it closes.
+Inventory preparation runs in the background; typing cancels pending timed work.
+
+Five preview lines stay pinned above scrollback: status evidence, full thread
+title, full workdir, Git branch (or detached commit), and session/state age.
+Long details wrap. Git inspection is read-only and bounded; unavailable metadata
+shows `—`. Conversation identity and child evidence appear below those details.
+
 Select an agent and look at the single colored line pinned above its preview:
 
 `claude · working · fresh · 6s ago · hook: tool-batch-finished`
@@ -107,8 +228,9 @@ working/waiting hook evidence appears beside the current source, for example:
 That event age is historical, not a current turn or state timer. Fresh title or
 process observations do not imply that provider hooks are working. The selected
 preview refreshes status, evidence, and scrollback every two seconds without
-changing the search or selection. `Ctrl-R` refreshes the list and its status
-icons, keeping the selected pane when it exists.
+changing the search or selection. The list statuses and summary also refresh
+while idle. `Ctrl-R` rediscovers agents, keeping the query and selected pane
+when it exists.
 
 Claude's generated `Notification` matcher includes
 `permission_prompt|elicitation_dialog`. Merge that matcher into existing
@@ -201,7 +323,7 @@ preview_width = "60%"
 tab_order = ["palette", "agents", "tools", "projects", "status", "bookmarks", "docs"]
 
 [session]
-color = "cyan"
+color = "auto"
 
 [projects]
 roots = ["~/projects"]
@@ -307,14 +429,16 @@ sections = ["sessions", "panes"]
 
 ### `session`
 
-- `color`: bold session-label color in the Agents picker. Valid values are
+- `color`: bold session-label color in agent rows. The default, `auto`, assigns
+  a stable color based on the session name, shared across panes and refreshes.
+  Explicit global or session-local colors override automatic colors. Other values are
   `default`, `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `white`,
   `bright_black`, `bright_red`, `bright_green`, `bright_yellow`, `bright_blue`,
-  `bright_magenta`, `bright_cyan`, `bright_white`, and `orange`. The built-in
-  default is `cyan`; `default` uses the terminal's foreground color.
+  `bright_magenta`, `bright_cyan`, `bright_white`, and `orange`.
+  `default` uses the terminal's foreground color.
 
 Put this setting in the `.tmux-menu.conf` at a tmux session root to give that
-session its own header color:
+session its own label color:
 
 ```toml
 [session]
@@ -333,7 +457,8 @@ detected product name.
 
 `[agents.colors]` configures `codex`, `claude`, `other`, `branch`, `thread`,
 `workdir`, `attention`, `working`, `completed`, `waiting`, and `unknown`. Colors
-accept every `session.color` value plus `dim`.
+accept every explicit `session.color` value plus `dim`; `auto` applies only to
+session names.
 
 ```toml
 [agents]
@@ -678,11 +803,24 @@ Run `tmux-menu popup agents` or `tmux-menu popup agents --picker` when each
 agent has its own tmux pane. Both open the same fzf list with 15 visible rows
 when space allows; smaller terminals reserve space for the preview. Attention
 rows appear first. Type to filter and select a pane to preview it. Every two
-seconds, its status and scrollback refresh without changing the search or
-selection. Press `Ctrl-R` to refresh agent discovery and list icons.
+seconds while idle, row statuses and the selected preview refresh without
+changing the search, selection, or row order. Press `Ctrl-R` to rediscover and
+reorder agents. Use `Ctrl-A` for attention, `Ctrl-S` for the current session,
+`Ctrl-D` for completed, and `Ctrl-Y` to copy the selected workdir.
 
-Timed refresh uses fzf 0.73.0 or newer, which introduced the
-[`every(N)` event](https://github.com/junegunn/fzf/releases/tag/v0.73.0).
+The picker requires fzf 0.74.5 or newer for field-based identity tracking across
+live reloads. Matching still uses fzf's fuzzy/extended query syntax on full fields.
+
+After building, run the isolated interface regression without opening your popup
+or calling a provider:
+
+```sh
+python3 scripts/test-agents-picker.py
+```
+
+It checks live identity/selection, disappearing rows, full-title search, refresh,
+view switching, filters, Git details, resize, and copy dispatch through a fake
+clipboard command.
 
 Status is normalized as `attention`, `working`, `completed`, `waiting`, or
 `unknown`. Codex and Claude hook evidence takes precedence only while it still

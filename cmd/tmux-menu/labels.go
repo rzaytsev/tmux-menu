@@ -59,19 +59,6 @@ func agentPaneLabelWithConfig(p tmux.Pane, currentPaneID string, status agentSta
 		colorAgentStatusWithConfig(status, agentsConfig), colorAgentIcon(name, agentsConfig), colorSessionWithColor(shortUUID(p.SessionName), sessionColor), colorAgentThread(title, agentsConfig), colorAgentText(shortenHome(p.CurrentPath), agentsConfig.Colors.Workdir, false))
 }
 
-func agentListPaneLabel(p tmux.Pane, currentPaneID string, status agentStatus, name string, sessionColor string) string {
-	return agentListPaneLabelWithConfig(p, currentPaneID, status, name, sessionColor, config.Default().Agents)
-}
-
-func agentListPaneLabelWithConfig(p tmux.Pane, currentPaneID string, status agentStatus, name string, sessionColor string, agentsConfig config.AgentsConfig) string {
-	title := agentListPaneTitle(p, name)
-	if p.PaneID != "" && p.PaneID == currentPaneID {
-		title = agentsConfig.Icons.Current + title
-	}
-	return fmt.Sprintf("%s %s %s %s  %s",
-		colorSessionWithColor(shortUUID(p.SessionName), sessionColor), colorAgentStatusWithConfig(status, agentsConfig), colorAgentIcon(name, agentsConfig), colorAgentThread(title, agentsConfig), colorAgentText(agentListWorkdir(p.CurrentPath), agentsConfig.Colors.Workdir, false))
-}
-
 func agentListWorkdir(path string) string {
 	return strings.TrimPrefix(shortenHome(path), "~/projects/")
 }

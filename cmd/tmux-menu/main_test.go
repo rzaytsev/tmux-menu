@@ -354,12 +354,12 @@ func TestAgentListShowsEveryAgentAsASelectableRow(t *testing.T) {
 
 	labels := make([]string, 0, len(items))
 	for _, item := range items {
-		labels = append(labels, stripANSI(item.Label))
+		labels = append(labels, strings.Join(strings.Fields(stripANSI(item.Label)), " "))
 	}
 	want := []string{
-		"docs ● > Docs  /tmp/docs",
-		"work ○ > Flatten agents  /tmp/tmux-menu",
-		"work ○ ✳ *Review infrastructure  /tmp/infra",
+		"● working > codex docs — Docs /tmp/docs —",
+		"○ waiting > codex work — Flatten agents /tmp/tmux-menu —",
+		"○ waiting ✳ claude work — *Review infrastructure /tmp/infra —",
 	}
 	if !reflect.DeepEqual(labels, want) {
 		t.Fatalf("agent list:\n%s\nwant:\n%s", strings.Join(labels, "\n"), strings.Join(want, "\n"))
@@ -385,13 +385,14 @@ func TestAgentListWorkdirDropsProjectsPrefix(t *testing.T) {
 }
 
 func TestAgentListClaudeMarkerOnlyFallsBackToWorkdirName(t *testing.T) {
-	label := stripANSI(agentListPaneLabel(tmux.Pane{
+	items, _ := agentPickerItemsForRows([]agentRow{{pane: tmux.Pane{
 		SessionName: "work",
 		PaneTitle:   "✳",
 		CurrentPath: "/tmp/infrastructure",
-	}, "", agentStatusWaiting, "claude", "cyan"))
+	}, status: agentStatusWaiting, name: "claude"}}, "", nil, config.Default().Agents, 120)
+	label := strings.Join(strings.Fields(stripANSI(items[0].Label)), " ")
 
-	if !strings.Contains(label, "✳ infrastructure") || strings.Contains(label, "✳ ✳") {
+	if !strings.Contains(label, "infrastructure") || strings.Contains(label, "✳ ✳") {
 		t.Fatalf("Claude marker-only row should use its workdir name: %q", label)
 	}
 }
@@ -417,8 +418,9 @@ func TestAgentListUsesConfiguredIconsAndColors(t *testing.T) {
 	agentsConfig.Colors.Unknown = "dim"
 
 	pane := tmux.Pane{SessionName: "work", PaneID: "%1", PaneTitle: "thread", CurrentPath: "/tmp/project"}
-	label := agentListPaneLabelWithConfig(pane, "%1", agentStatusWaiting, "codex", "red", agentsConfig)
-	if got := stripANSI(label); got != "work i C @thread  /tmp/project" {
+	items, _ := agentPickerItemsForRows([]agentRow{{pane: pane, status: agentStatusWaiting, name: "codex"}}, "%1", map[string]string{"work": "red"}, agentsConfig, 120)
+	label := items[0].Label
+	if got := strings.Join(strings.Fields(stripANSI(label)), " "); got != "i waiting C codex work — @thread /tmp/project —" {
 		t.Fatalf("custom agent list label = %q", got)
 	}
 	for _, want := range []string{
@@ -433,7 +435,8 @@ func TestAgentListUsesConfiguredIconsAndColors(t *testing.T) {
 		}
 	}
 
-	if got := stripANSI(agentListPaneLabelWithConfig(pane, "", agentStatusWorking, "claude", "red", agentsConfig)); !strings.HasPrefix(got, "work w L thread") {
+	items, _ = agentPickerItemsForRows([]agentRow{{pane: pane, status: agentStatusWorking, name: "claude"}}, "", nil, agentsConfig, 120)
+	if got := strings.Join(strings.Fields(stripANSI(items[0].Label)), " "); !strings.HasPrefix(got, "w working L claude work — thread") {
 		t.Fatalf("custom Claude label = %q", got)
 	}
 	if got := stripANSI(colorAgentIcon("gemini", agentsConfig)); got != "A" {
@@ -448,13 +451,13 @@ func TestAgentListUsesConfiguredIconsAndColors(t *testing.T) {
 }
 
 func TestAgentPreviewWindowLeavesFifteenVisibleResults(t *testing.T) {
-	if got := agentPreviewWindow(40); got != "down:21:border-rounded:wrap:follow:noinfo:~1" {
+	if got := agentPreviewWindow(40); got != "down:19:border-rounded:wrap:follow:noinfo:~5" {
 		t.Fatalf("agentPreviewWindow(40) = %q", got)
 	}
-	if got := agentPreviewWindow(0); got != "down:60%:border-rounded:wrap:follow:noinfo:~1" {
+	if got := agentPreviewWindow(0); got != "down:60%:border-rounded:wrap:follow:noinfo:~5" {
 		t.Fatalf("agentPreviewWindow(0) = %q", got)
 	}
-	if got := agentPreviewWindow(20); got != "down:5:border-rounded:wrap:follow:noinfo:~1" {
+	if got := agentPreviewWindow(20); got != "down:12:border-rounded:wrap:follow:noinfo:~5" {
 		t.Fatalf("small terminals must retain usable preview space: %q", got)
 	}
 }

@@ -610,6 +610,10 @@ func TestValidateRejectsBadAgentPresentation(t *testing.T) {
 	if err := Validate(cfg); err == nil || !strings.Contains(err.Error(), "agents.colors.codex") {
 		t.Fatalf("expected invalid Codex color error, got %v", err)
 	}
+	cfg.Agents.Colors.Codex = "auto"
+	if err := Validate(cfg); err == nil {
+		t.Fatal("auto is only supported for session colors")
+	}
 
 	cfg = Default()
 	cfg.Agents.Icons.Current = "\n"
@@ -697,7 +701,7 @@ func TestSampleConfigIsToml(t *testing.T) {
 		"show_help = false",
 		`tab_order = ["palette", "agents", "tools", "projects", "status", "bookmarks", "docs"]`,
 		"[session]",
-		`color = "cyan"`,
+		`color = "auto"`,
 		"bright_green",
 		"[agents.icons]",
 		`codex = ">"`,
