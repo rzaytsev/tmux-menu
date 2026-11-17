@@ -36,11 +36,15 @@ The read-only `agent-hook snapshot` export includes exact conversation and tmux
 identity metadata for notification inboxes that display current agent state.
 Agent marks, status icons, and colors remain configurable through
 `[agents.icons]`, `[agents.colors]`, and per-session `[session].color`.
-Tab and Shift-Tab cycle through a configurable picker order. Alt-number
+Tab and Shift-Tab cycle through a configurable picker order, except Links and
+Bookmarks where they select multiple targets. Alt-number
 shortcuts remain available; the navigation footer is hidden.
-The links picker recognizes configurable URL schemes, including HTTP(S), Slack,
-and Telegram deep links by default. A session-local Jira base URL can also turn
-issue keys such as `INF-234` into canonical `jira` browser-link rows.
+Links and Bookmarks share a typed, aligned fzf picker with multiselect,
+file/directory/GitHub/Slack filters and local previews. Links reads the invoking
+pane's scrollback; Bookmarks parses CommonMark links from configured directories.
+Files open in a focused Neovim pane with line/column/range navigation; directories
+open a focused shell window; filesystem-root (`/`) rows are omitted. Web links use the workspace/home `browser` setting,
+and `slack://` opens Slack. See [typed links and bookmarks](docs/usage.md#links).
 The docs picker searches Markdown titles and paths across project files and
 notes, with Space to preview and Enter to edit. Use `Alt-7` for links, `Alt-8`
 for docs, and `Ctrl-R` to refresh any picker. `Ctrl-Y` copies a link, bookmark
@@ -53,6 +57,8 @@ target, document path, or task path without opening it.
 - fzf 0.74.5 or newer (for identity tracking across live reloads)
 - macOS `open`/`pbcopy` for the default URL and clipboard actions
 - optional: `glow` for task and document previews
+
+Pane discovery uses length framing with printable separators for tmux 3.4 compatibility.
 
 ## Install
 

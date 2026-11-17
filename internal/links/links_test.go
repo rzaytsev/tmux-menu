@@ -54,7 +54,7 @@ ignored ftp://example.com`
 		"TG://resolve?domain=example",
 		"mailto:user@example.com",
 	} {
-		if items[i].Kind != KindURL || items[i].Target != want {
+		if items[i].Kind != Classify(want) || items[i].Target != want {
 			t.Fatalf("item %d = %#v, want URL %q", i, items[i], want)
 		}
 	}
@@ -154,7 +154,7 @@ ignore lowercase inf-221 and embedded prefixINF-222`
 	}
 }
 
-func TestExtractCanonicalizesJiraURLWithEncodedBacktick(t *testing.T) {
+func TestExtractPreservesJiraURLWithEncodedBacktick(t *testing.T) {
 	items := Extract(
 		"https://dentiai.atlassian.net/browse/INF-234%60",
 		"",
@@ -164,9 +164,8 @@ func TestExtractCanonicalizesJiraURLWithEncodedBacktick(t *testing.T) {
 	if len(items) != 1 {
 		t.Fatalf("expected one canonical Jira URL, got %#v", items)
 	}
-	if items[0].Kind != KindJira ||
-		items[0].Raw != "INF-234" ||
-		items[0].Target != "https://dentiai.atlassian.net/browse/INF-234" {
+	if items[0].Kind != KindURL ||
+		items[0].Target != "https://dentiai.atlassian.net/browse/INF-234%60" {
 		t.Fatalf("unexpected Jira item: %#v", items[0])
 	}
 }

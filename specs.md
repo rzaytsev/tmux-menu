@@ -48,8 +48,8 @@ tmux-menu sample-config
 
 Inside `fzf` picker views:
 
-- `Tab`: next configured view.
-- `Shift-Tab`: previous configured view.
+- `Tab`: next configured view (multiselect in links/bookmarks).
+- `Shift-Tab`: previous configured view (select upward in links/bookmarks).
 - `Alt-1`: main palette
 - `Alt-2`: agents
 - `Alt-3`: tools
@@ -344,68 +344,110 @@ an error instead of hanging indefinitely.
 
 ## Links Mode
 
-`links` captures the active/origin pane scrollback and extracts:
+Links captures 300 joined scrollback lines from the exact invoking pane, with
+bounded output and identity validation before and after capture. Configured URL
+schemes, existing local file/directory references and optional Jira issue keys
+are extracted; relative references use the source pane cwd. Quoted, angle-wrapped
+and whole-line paths support spaces. URLs preserve balanced parentheses and
+queries/fragments; unmatched closing prose delimiters are trimmed.
 
-- URLs whose scheme appears in `links.url_schemes`, defaulting to `http`,
-  `https`, `slack`, and `tg`; configured scheme names are case-insensitive and
-  local config replaces the inherited list
-- uppercase Jira issue keys matching `<PROJECT>-<NUMBER>` when
-  `links.jira_base_url` is non-empty; targets are
-  `<jira_base_url>/browse/<ISSUE-KEY>`, rows use the `jira` kind, captured Jira
-  browse URLs are canonicalized to the same target, and duplicates are omitted
-- absolute file paths with optional `:line`, `:line:column`, or `:start-end`
-- relative file paths with optional `:line`, `:line:column`, or `:start-end`,
-  resolved from the origin pane directory
+Both pickers classify targets as `web`, `slack`, `jira`, `notion`, `gh`, `pr`,
+`issue`, `ci`, `commit`, `release`, `GCP`, `AWS`, `file`, or `dir`. Classification
+uses parsed hostnames with domain boundaries; lookalike domains remain `web`.
+GitHub subtypes distinguish repositories, pull requests, issues, Actions runs,
+commits and releases. Slack web links and `slack://` are `slack`; Notion includes
+`app.notion.com` and `notion.so`. Jira issue URLs use Atlassian `/browse/` paths.
 
-Selecting a row with Enter first copies the URL or resolved file path to the
-macOS clipboard. File rows then open `$EDITOR` in a tmux popup at the
-referenced line. The editor command and popup size/border come from the
-`editor` config, defaulting to `$EDITOR` and `80% x 80%` with a rounded border.
-URL rows then run `open <url>` so macOS opens it in the default browser.
-`links.open` controls file-row Enter behavior with `mode = "popup"`, `"pane"`,
-or `"window"`. When `mode = "pane"`, `pane_side` may be `"right"`, `"left"`,
-`"above"`, or `"below"`.
+Rows show aligned `type | target` columns in Links and `type | title | target`
+in Bookmarks. Filesystem-root (`/`) directory rows are omitted. Titles use Unicode display widths and truncate at a fixed column
+width. Long targets stay intact behind fzf's single-line clipping; opening,
+copying and preview always receive the complete resolved target.
 
-Selecting a row with `Alt-Enter` also copies the target, then uses
-`links.alternate`. By default file rows run `open -a TextEdit <file>` and URL
-rows run `open -a Safari <url>`. The command may include `{}` when the target
-must appear before later arguments; tmux-menu passes the target as shell data.
-Otherwise the quoted target is appended. Single-quoted placeholders are
-rejected because shell positional arguments do not expand inside single quotes.
+| Key | Action |
+| --- | --- |
+| Enter | Open the current row or all Tab-selected targets. |
+| Tab / Shift-Tab | Toggle selection and move down / up. |
+| Ctrl-Y | Copy only targets, separated by newlines; close the picker. |
+| Ctrl-/ | Toggle local file/directory preview; web previews never fetch pages. |
+| Alt-F / Alt-D | Show only files / directories. |
+| Alt-G | Show all GitHub URLs, regardless of subtype or bookmark title. |
+| Alt-S | Show Slack targets. |
+| Alt-A | Restore all types. |
+| Ctrl-R | Rescan the source. |
 
-The popup launcher passes `TMUX_MENU_ORIGIN_PANE` and `TMUX_MENU_ORIGIN_PATH`
-so the links parser reads the pane that invoked the popup, not the temporary
-popup pane.
+Type filters replace the current query. Alt-number view shortcuts remain
+available; Tab selects multiple targets in these two views.
 
-All picker views require a readable tmux runtime context. Failures from
-`tmux display-message` are reported immediately instead of falling back to empty
-pane, path, or session values.
+Web URLs use the top-level `browser` setting, inherited from home and overridden
+by workspace/origin config. An empty browser uses the system default. `slack://`
+opens native Slack. File targets open Neovim in a new pane to the right of the
+invoking pane. Directories open a new window with an interactive shell in that
+directory. Dispatch validates the exact invoking session/window/pane/PID tuple;
+the destination retains focus after the popup closes. Enter leaves the clipboard
+unchanged. The old `links.open` and `bookmarks.open` fields remain accepted for
+config compatibility; typed local targets use the pane/window behavior above.
+
+Locations support `file.md`, `file.md:5`, `file.md:5-10`, `file.md:5:12`,
+`file.md#L5`, and `file.md#L5-L10`, plus absolute paths, `~/…`, and local
+`file://` URLs. Ranges select lines in Neovim. Resolved targets deduplicate in
+source order, retaining a useful title. Queries, fragments and shell characters
+in web URLs stay literal; targets are passed as data rather than shell code.
 
 ## Bookmarks Mode
 
-`bookmarks` scans inline Markdown links from `.md` files under
-`bookmarks.dirs`. The project name comes from the tmux session path when
-available, then the origin pane path, then the session name.
+`bookmarks` parses actual CommonMark links from regular `.md` files (including
+uppercase `.MD`), recursively, in directory/file/document order. Inline links,
+reference links (including collapsed/shortcut forms) and angle autolinks are
+supported. Code blocks, inline code, standalone images, bare URL text and raw
+HTML links are excluded. An outer link around an image remains a bookmark.
 
-The default source order is:
+```markdown
+[Pull request](https://github.com/org/repo/pull/76)
+[Runbook][ops]
 
-1. `~/notes/projects/{project}`
-2. `~/projects/{project}`
+[ops]: https://example.com/runbook
 
-`{project}` expands to the current tmux project/session name. Configured
-directories are scanned recursively in order. Missing roots are skipped. Path
-parts matching `bookmarks.ignore_patterns` are skipped; the default is
-`[".git", ".tmp", "vendor", "node_modules", ".venv"]`. Only inline links shaped like `[label](target)`
-are shown; raw URLs and image links are ignored.
+<https://example.com/status>
+[Source](../src/main.tf:5:12)
+[Range](../src/main.tf#L5-L10)
+[Notes with spaces](<../docs/design notes.md>)
+[Directory](../docs/)
+```
 
-Rows start with the source directory name and then show the Markdown label,
-target, and source file with a line number. Home paths are displayed with `~`.
+Local destinations resolve relative to the containing Markdown file. Local
+heading/query suffixes are stripped; line anchors retain navigation. Missing
+local targets remain visible and report an error on opening.
 
-Selecting an `http://` or `https://` target runs `open <url>` so macOS opens it
-in the default browser. Selecting a local file target resolves it relative to
-the Markdown file containing the link, strips fragment/query suffixes, and opens
-the resolved file with `editor.command` using `bookmarks.open`. The default is a
-tmux pane split to the right of the origin pane.
+Home configuration lives in `~/.tmux-menu.conf`. A workspace list in the session
+root's `.tmux-menu.conf` replaces the entire home list; an origin-directory
+overlay can replace it again. Lists never merge. Relative directories start at
+the directory containing the config that supplied the list; absolute and `~/`
+paths work. `dirs = []` disables scanning. Without any list, scan the session
+workspace, falling back to `~/notes` if no workspace is available. Invalid
+configuration, missing directories and non-directory roots report errors rather
+than triggering a broader scan. Overlapping directories are visited once.
+`{project}` expansion and `ignore_patterns` retain their existing meanings;
+default ignored path parts are `.git`, `.tmp`, `vendor`, `node_modules`, `.venv`.
+
+```toml
+# ~/.tmux-menu.conf — paths relative to home
+[bookmarks]
+dirs = ["notes/bookmarks"]
+```
+
+```toml
+# ~/projects/denti.ai/.tmux-menu.conf
+browser = "Google Chrome"
+[bookmarks]
+dirs = ["docs/bookmarks"] # must exist; replaces the home list
+```
+
+```toml
+# ~/projects/clos/.tmux-menu.conf
+browser = "Firefox"
+```
+
+These settings are independent of `.rex-menu.conf`; no Rex runtime is required.
 
 ## Docs Mode
 
@@ -654,3 +696,6 @@ cmd = "rg -n {query} {origin}"
 Child-first hook events keep the unobserved parent state `unknown`. Older
 child-only records with an empty parent state are normalized on read without
 rewriting history; all newly persisted hook records are validated.
+
+Pane inventory uses printable length framing compatible with tmux 3.4 output;
+separator characters within metadata do not change pane identity fields.

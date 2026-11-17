@@ -32,6 +32,8 @@ var (
 
 type Dispatch struct {
 	Mode               string     `json:"mode"`
+	Input              string     `json:"input,omitempty"`
+	Args               []string   `json:"args,omitempty"`
 	Cmd                string     `json:"cmd,omitempty"`
 	PaneID             string     `json:"pane_id,omitempty"`
 	PanePID            int        `json:"pane_pid,omitempty"`
@@ -40,6 +42,7 @@ type Dispatch struct {
 	SessionID          string     `json:"session_id,omitempty"`
 	WindowName         string     `json:"window_name,omitempty"`
 	WorkingDir         string     `json:"working_dir,omitempty"`
+	TargetPath         string     `json:"target_path,omitempty"`
 	ProjectPath        string     `json:"project_path,omitempty"`
 	ProjectSessionName string     `json:"project_session_name,omitempty"`
 	BootstrapFile      string     `json:"bootstrap_file,omitempty"`
@@ -131,6 +134,33 @@ func Execute(ctx context.Context, d Dispatch, originPane string) error {
 			}
 		}
 		return nil
+	case "exec":
+		if len(d.Args) == 0 {
+			return fmt.Errorf("empty exec arguments")
+		}
+		cmd := exec.CommandContext(ctx, d.Args[0], d.Args[1:]...)
+		cmd.Stdin = strings.NewReader(d.Input)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		return cmd.Run()
+	case "link-file", "link-dir":
+		if err := revalidateSwitchPane(ctx, d); err != nil {
+			return err
+		}
+		info, err := os.Stat(d.TargetPath)
+		if err != nil {
+			return fmt.Errorf("open local target: %w", err)
+		}
+		if d.Mode == "link-dir" {
+			if !info.IsDir() {
+				return fmt.Errorf("target is not a directory")
+			}
+			return tmuxExec(ctx, "new-window", "-t", d.SessionID+":", "-c", d.TargetPath)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("target is not a regular file")
+		}
+		return tmuxExec(ctx, paneArgs(d, d.PaneID)...)
 	case "switch-pane":
 		if err := revalidateSwitchPane(ctx, d); err != nil {
 			return err

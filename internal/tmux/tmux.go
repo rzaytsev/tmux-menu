@@ -13,7 +13,9 @@ import (
 	"time"
 )
 
-const sep = "\x1f"
+// Use a printable separator: tmux 3.4 can render control separators as octal escapes.
+// Length framing keeps separators and newlines inside field values unambiguous.
+const sep = ":"
 
 const (
 	defaultCommandOutputBytes int64 = 4 << 20

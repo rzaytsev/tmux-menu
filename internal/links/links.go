@@ -5,15 +5,17 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 type Kind string
 
 const (
 	KindFile Kind = "file"
-	KindURL  Kind = "url"
+	KindURL  Kind = "web"
+	KindDir  Kind = "dir"
 	KindJira Kind = "jira"
 )
 
@@ -22,105 +24,90 @@ type Item struct {
 	Raw        string
 	Target     string
 	Line       int
+	EndLine    int
+	Title      string
 	Column     int
 	SourceLine string
 }
 
 var (
-	fileRefRE = regexp.MustCompile(
-		`(?:^|[\s"'(<\[])(` +
-			`(?:~\/|\.{1,2}\/|\/|[A-Za-z0-9_.-]+\/)?` +
-			`(?:[A-Za-z0-9_@.+-]+\/)*` +
-			`(?:[A-Za-z0-9_@.+-]+\.[A-Za-z0-9][A-Za-z0-9._+-]*|Makefile|Dockerfile)` +
-			`(?::\d+(?:-\d+)?)?(?::\d+)?` +
-			`)(?:$|[\s"')>\],;:.])`,
-	)
 	jiraIssueRE = regexp.MustCompile(`[A-Z][A-Z0-9_]*-[0-9]+`)
 )
 
+// Extract uses non-overlapping URL/quoted/path tokens so URL components never
+// become spurious local references. Only existing scrollback paths are offered.
 func Extract(scrollback string, baseDir string, urlSchemes []string, jiraBaseURL string) []Item {
-	seen := make(map[string]bool)
-	items := make([]Item, 0)
-	urlRefRE := urlRefRegexp(urlSchemes)
-	jiraBaseURL = strings.TrimRight(strings.TrimSpace(jiraBaseURL), "/")
-	for _, line := range strings.Split(scrollback, "\n") {
-		if urlRefRE != nil {
-			for _, match := range urlRefRE.FindAllStringSubmatch(line, -1) {
-				target := trimURL(match[1])
-				if !validURL(target, urlSchemes) {
-					continue
-				}
-				kind := KindURL
-				raw := target
-				if issue, ok := jiraIssueFromURL(target, jiraBaseURL); ok {
-					kind = KindJira
-					raw = issue
-					target = jiraBaseURL + "/browse/" + issue
-				}
-				key := string(kind) + "\x00" + target
-				if seen[key] {
-					continue
-				}
-				seen[key] = true
-				items = append(items, Item{Kind: kind, Raw: raw, Target: target, SourceLine: strings.TrimSpace(line)})
+	var items []Item
+	add := func(raw, source string, local bool) {
+		item, err := Resolve(raw, baseDir, false)
+		if !strings.HasPrefix(strings.ToLower(raw), "file:") && validURL(raw, urlSchemes) {
+			item = Item{Raw: raw, Target: raw, Kind: Classify(raw)}
+			err = nil
+		}
+		if err != nil {
+			return
+		}
+		if local || item.Kind == KindFile || item.Kind == KindDir {
+			info, err := os.Stat(item.Target)
+			if err != nil || (!info.IsDir() && !info.Mode().IsRegular()) {
+				return
 			}
+		} else if !validURL(item.Target, urlSchemes) {
+			return
+		}
+		item.SourceLine = source
+		items = append(items, item)
+	}
+	schemes := append(append([]string{}, urlSchemes...), "file")
+	urlRE := urlRefRegexp(schemes)
+	pattern := quotedRefRE.String()
+	if urlRE != nil {
+		pattern += "|" + urlRE.String()
+	}
+	tokenRE := regexp.MustCompile(pattern)
+	for _, line := range strings.Split(ansi.Strip(scrollback), "\n") {
+		// A whole-line path may contain spaces without quoting.
+		if item, err := Resolve(strings.TrimSpace(line), baseDir, false); err == nil {
+			if info, err := os.Stat(item.Target); err == nil && (info.IsDir() || info.Mode().IsRegular()) {
+				add(strings.TrimSpace(line), line, true)
+				continue
+			}
+		}
+		masked := []byte(line)
+		consume := func(a, b int) {
+			for i := a; i < b; i++ {
+				masked[i] = ' '
+			}
+		}
+		for _, m := range tokenRE.FindAllStringIndex(line, -1) {
+			raw := line[m[0]:m[1]]
+			quoted := strings.ContainsAny(raw[:1], "\"'`<")
+			if quoted {
+				raw = raw[1 : len(raw)-1]
+			} else {
+				if m[0] > 0 && strings.ContainsAny(line[m[0]-1:m[0]], "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+.-") {
+					continue
+				}
+				raw = trimURL(raw)
+			}
+			add(raw, line, false)
+			consume(m[0], m[1])
+		}
+		for _, token := range strings.Fields(string(masked)) {
+			raw := strings.TrimRight(strings.TrimLeft(token, "`\"'()[]<>,;"), "`\"'()[]<>,;.")
+			raw = strings.TrimSuffix(raw, ":")
+			add(raw, line, true)
 		}
 		if jiraBaseURL != "" {
-			for _, issue := range jiraIssues(line) {
-				target := jiraBaseURL + "/browse/" + issue
-				key := string(KindJira) + "\x00" + target
-				if seen[key] {
-					continue
-				}
-				seen[key] = true
-				items = append(items, Item{Kind: KindJira, Raw: issue, Target: target, SourceLine: strings.TrimSpace(line)})
+			for _, issue := range jiraIssues(string(masked)) {
+				items = append(items, Item{Kind: KindJira, Raw: issue, Target: strings.TrimRight(jiraBaseURL, "/") + "/browse/" + issue, SourceLine: line})
 			}
 		}
-
-		for _, match := range fileRefRE.FindAllStringSubmatch(line, -1) {
-			if len(match) < 2 {
-				continue
-			}
-			raw := trimFileRef(match[1])
-			if strings.Contains(raw, "://") {
-				continue
-			}
-			path, lineNo, colNo := splitLocation(raw)
-			target := resolvePath(path, baseDir)
-			info, err := os.Stat(target)
-			if err != nil || info.IsDir() {
-				continue
-			}
-			key := string(KindFile) + "\x00" + target + "\x00" + strconv.Itoa(lineNo) + "\x00" + strconv.Itoa(colNo)
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
-			items = append(items, Item{
-				Kind:       KindFile,
-				Raw:        raw,
-				Target:     target,
-				Line:       lineNo,
-				Column:     colNo,
-				SourceLine: strings.TrimSpace(line),
-			})
-		}
 	}
-	return items
+	return Deduplicate(items)
 }
 
-func jiraIssueFromURL(target string, jiraBaseURL string) (string, bool) {
-	prefix := jiraBaseURL + "/browse/"
-	if jiraBaseURL == "" || !strings.HasPrefix(target, prefix) {
-		return "", false
-	}
-	rest := strings.TrimPrefix(target, prefix)
-	match := jiraIssueRE.FindStringIndex(rest)
-	if match == nil || match[0] != 0 || match[1] < len(rest) && isIssueWordByte(rest[match[1]]) {
-		return "", false
-	}
-	return rest[:match[1]], true
-}
+var quotedRefRE = regexp.MustCompile("\"[^\"\n]+\"|'[^'\n]+'|`[^`\n]+`|<[^<>\n]+>")
 
 func jiraIssues(line string) []string {
 	issues := make([]string, 0)
@@ -141,7 +128,13 @@ func isIssueWordByte(b byte) bool {
 }
 
 func trimURL(s string) string {
-	return strings.TrimRight(s, ".,;)]}`")
+	s = strings.TrimRight(s, ".,;`")
+	for _, pair := range [][2]string{{"(", ")"}, {"[", "]"}, {"{", "}"}} {
+		for strings.HasSuffix(s, pair[1]) && strings.Count(s, pair[1]) > strings.Count(s, pair[0]) {
+			s = strings.TrimSuffix(s, pair[1])
+		}
+	}
+	return s
 }
 
 func urlRefRegexp(schemes []string) *regexp.Regexp {
@@ -155,7 +148,7 @@ func urlRefRegexp(schemes []string) *regexp.Regexp {
 	if len(patterns) == 0 {
 		return nil
 	}
-	return regexp.MustCompile(`(?i)(?:^|[^a-z0-9+.-])((?:` + strings.Join(patterns, "|") + `):(?://)?[^\s<>"']+)`)
+	return regexp.MustCompile(`(?i)(?:` + strings.Join(patterns, "|") + `):(?://)?[^\s<>]+`)
 }
 
 func validURL(s string, schemes []string) bool {
@@ -173,51 +166,6 @@ func validURL(s string, schemes []string) bool {
 		return true
 	}
 	return false
-}
-
-func trimFileRef(s string) string {
-	return strings.TrimRight(strings.Trim(s, `"'()[]<>,;`), ".")
-}
-
-func splitLocation(raw string) (string, int, int) {
-	parts := strings.Split(raw, ":")
-	if len(parts) == 1 {
-		return raw, 0, 0
-	}
-
-	col := 0
-	last := parts[len(parts)-1]
-	if n, ok := parsePositiveInt(last); ok {
-		col = n
-		parts = parts[:len(parts)-1]
-	}
-
-	line := 0
-	if len(parts) > 1 {
-		last = parts[len(parts)-1]
-		if n, ok := parseLineStart(last); ok {
-			line = n
-			parts = parts[:len(parts)-1]
-		} else if col > 0 {
-			line = col
-			col = 0
-		}
-	} else if col > 0 {
-		line = col
-		col = 0
-	}
-
-	return strings.Join(parts, ":"), line, col
-}
-
-func parseLineStart(s string) (int, bool) {
-	start, _, _ := strings.Cut(s, "-")
-	return parsePositiveInt(start)
-}
-
-func parsePositiveInt(s string) (int, bool) {
-	n, err := strconv.Atoi(s)
-	return n, err == nil && n > 0
 }
 
 func resolvePath(path string, baseDir string) string {
@@ -239,5 +187,5 @@ func expandHome(path string) string {
 			return home + strings.TrimPrefix(path, "~")
 		}
 	}
-	return os.ExpandEnv(path)
+	return path
 }

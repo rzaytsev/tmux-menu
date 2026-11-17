@@ -22,6 +22,7 @@ type Item[T any] struct {
 }
 
 type Result[T any] struct {
+	Values   []T
 	Key      string
 	Value    T
 	Selected bool
@@ -29,6 +30,7 @@ type Result[T any] struct {
 }
 
 type Options struct {
+	Multi          bool
 	Header         string
 	InputHeader    []string
 	Input          string
@@ -132,12 +134,13 @@ func SelectWithExpectAndPreviewOptions[T any](ctx context.Context, prompt string
 			return Result[T]{}, fmt.Errorf("missing fzf query output")
 		}
 	}
-	result, err := parseFZFOutput(output, items, len(expectKeys) > 0)
+	result, err := parseSelectionOutput(output, items, len(expectKeys) > 0, options.Multi)
 	if state != nil && result.Selected {
 		line := output
 		if len(expectKeys) > 0 {
 			_, line, _ = strings.Cut(line, "\n")
 		}
+		line, _, _ = strings.Cut(line, "\n")
 		id, _, _ := strings.Cut(line, "\t")
 		index, _ := strconv.Atoi(id)
 		state.Selected = itemStateKey(items[index])
@@ -204,6 +207,9 @@ func buildFZFArgs(prompt string, expectKeys []string, footer string, previewComm
 		"--prompt", prompt,
 		"--delimiter", "\t",
 		"--with-nth", withNth,
+	}
+	if options.Multi {
+		args = append(args, "--multi", "--no-wrap", "--bind", "tab:toggle+down,btab:toggle+up")
 	}
 	if len(expectKeys) > 0 {
 		args = append(args, "--expect="+strings.Join(expectKeys, ","))
@@ -299,4 +305,37 @@ func parseFZFOutput[T any](out string, items []Item[T], expect bool) (Result[T],
 		metadata = fields[3]
 	}
 	return Result[T]{Key: key, Value: items[id].Value, Selected: true, Metadata: metadata}, nil
+}
+
+// Parse each selected record through the same strict opaque-ID boundary.
+func parseSelectionOutput[T any](out string, items []Item[T], expect, multi bool) (Result[T], error) {
+	if !multi {
+		return parseFZFOutput(out, items, expect)
+	}
+	key, body := "", out
+	if expect {
+		var ok bool
+		key, body, ok = strings.Cut(out, "\n")
+		if !ok {
+			return parseFZFOutput(out, items, expect)
+		}
+	}
+	if strings.TrimSuffix(body, "\n") == "" {
+		return parseFZFOutput(out, items, expect)
+	}
+	var result Result[T]
+	for _, line := range strings.Split(strings.TrimSuffix(body, "\n"), "\n") {
+		row, err := parseFZFOutput(key+"\n"+line, items, true)
+		if err != nil {
+			return Result[T]{}, err
+		}
+		if !result.Selected {
+			result = row
+			result.Key = key
+		}
+		if row.Selected {
+			result.Values = append(result.Values, row.Value)
+		}
+	}
+	return result, nil
 }

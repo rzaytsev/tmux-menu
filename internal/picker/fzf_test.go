@@ -211,3 +211,21 @@ func writeFakeFZF(t *testing.T, body string) {
 	}
 	t.Setenv("PATH", dir)
 }
+
+func TestParseMultipleSelections(t *testing.T) {
+	items := []Item[string]{{Value: "first"}, {Value: "second"}}
+	result, err := parseSelectionOutput("ctrl-y\n0\tlabel one\n1\tlabel two\n", items, true, true)
+	if err != nil || len(result.Values) != 2 || result.Values[1] != "second" || result.Key != "ctrl-y" {
+		t.Fatal(result, err)
+	}
+	if _, err := parseSelectionOutput("\n0\tgood\n999\tbad\n", items, true, true); err == nil {
+		t.Fatal("bad ID accepted")
+	}
+}
+
+func TestMultiFilterFromEmptyView(t *testing.T) {
+	result, err := parseSelectionOutput("alt-a\n-1\tNo items\n", []Item[string]{}, true, true)
+	if err != nil || result.Selected || result.Key != "alt-a" {
+		t.Fatal(result, err)
+	}
+}

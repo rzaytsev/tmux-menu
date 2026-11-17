@@ -23,11 +23,12 @@ Work directly and keep changes small. This is a local tmux utility, not a framew
   order, query, selection, and exact row identity. Ctrl-R rediscovers and reorders.
 - `tools`: configured commands, dynamic Makefile targets from the session root/current dir, and quick dirs.
 - `projects`: lists one-level directories under `projects.roots`, creates/switches tmux sessions natively, and shows whether the configured bootstrap file exists.
-- `links`: captures origin pane scrollback, extracts URL schemes configured by `links.url_schemes` (default HTTP, HTTPS, Slack, and Telegram) plus Jira issue keys when the session-local `links.jira_base_url` is set, copies selected targets, opens file refs through configured `links.open`, opens URLs with `open`, and supports a configured alternate opener.
-- `bookmarks`: scans inline Markdown links from `bookmarks.dirs` in configured order, default `["~/notes/projects/{project}", "~/projects/{project}"]`, skips path parts matching `bookmarks.ignore_patterns` defaulting to `.git`, `.tmp`, `vendor`, `node_modules`, and `.venv`, opens HTTP(S) links with `open`, and opens local file links in a right-side editor pane.
+- `links`: typed URLs and existing file/directory references from joined origin-pane scrollback, with optional Jira issue-key expansion.
+- `bookmarks`: CommonMark inline/reference/autolinks from configured directories, excluding code and standalone images. Workspace lists replace home lists; empty lists disable scanning. Relative roots use the supplying config's directory; missing roots error. Without a list use the session workspace, then ~/notes.
+- Links/bookmarks share aligned type/title/target rows, Tab multiselect, Ctrl-Y copy, Ctrl-/ local preview, Alt-F files, Alt-D directories, Alt-G GitHub, Alt-S Slack and Alt-A all. Web dispatch uses workspace/home `browser`; slack:// opens Slack; local files open Neovim in a right pane and directories open shell windows, anchored to the exact invoking session/window/pane/PID. Legacy `links.open` and `bookmarks.open` remain accepted for config compatibility.
 - `docs`: scans Markdown titles and paths from `docs.dirs`, default notes for `{project}` plus the session root; Space previews, Enter edits, and overlapping roots deduplicate files.
 - `status`: when `status.targets` is configured, concurrently runs one JSON reporter per named active tmux session and shows urgency-sorted project rows with a visible block preview; otherwise it runs optional project-local `status.command` or shows the directory task board from `status.status_dir` and `status.statuses`.
-- Picker views support Tab/Shift-Tab through configured `picker.tab_order` and `Alt-1` main, `Alt-2` agents, `Alt-3` tools, `Alt-4` projects, `Alt-5` status, `Alt-6` bookmarks, `Alt-7` links, and `Alt-8` docs through `fzf --expect`; Ctrl-R refreshes every picker. Ctrl-Y copies targets/paths in links, bookmarks, docs, and directory status. The navigation footer is hidden; shortcuts stay active, while `picker.show_help` controls optional view-specific help.
+- Picker views (except links/bookmarks, where Tab selects multiple) support Tab/Shift-Tab through configured `picker.tab_order` and `Alt-1` main, `Alt-2` agents, `Alt-3` tools, `Alt-4` projects, `Alt-5` status, `Alt-6` bookmarks, `Alt-7` links, and `Alt-8` docs through `fzf --expect`; Ctrl-R refreshes every picker. Ctrl-Y copies targets/paths in links, bookmarks, docs, and directory status. The navigation footer is hidden; shortcuts stay active, while `picker.show_help` controls optional view-specific help.
 - Global config path: `~/.tmux-menu.conf`; local `.tmux-menu.conf` overlays in the session root and origin pane directory can add commands/quick dirs or replace scalar/list settings.
 
 ## Implementation Rules
@@ -76,7 +77,7 @@ Work directly and keep changes small. This is a local tmux utility, not a framew
   snapshot JSON, or a transcript store.
 - `Ctrl-X` retains exact-token completion acknowledgement; it must not approve
   agent prompts or send keys to the agent.
-- Tab/Alt-2 enter the Agents picker. Relaunch a popup only when its width changes.
+- Outside links/bookmarks, Tab enters the next configured view; Alt-2 enters Agents. Relaunch a popup only when its width changes.
   Both `agents` and `agents --picker` exit on cancellation.
 - The dedicated Agents popup width comes from `agents.popup_width`, default
   `100%`.
@@ -101,10 +102,10 @@ Work directly and keep changes small. This is a local tmux utility, not a framew
 - Sanitize picker labels and generated previews with `internal/displaytext`; reject control-bearing raw preview fields. Pass preview targets separately from shell templates. Bound project-file reads and reject non-regular files through `internal/fileutil`.
 - Status labels are only `<status> | <title> | <summary>`; do not include a redundant `status` kind prefix or visible file path.
 - Status selections open the file through `editor.command` using configured `status.open`.
-- Link file selections use `editor` config for command and size plus configured `links.open`; default is `$EDITOR` in an 80% x 80% rounded popup.
+- Typed link/bookmark files use Neovim in a new pane; keep `editor` config and `fileOpenDispatch` for docs/status. Preserve line, column and range navigation.
 - Jira issue keys are uppercase `<PROJECT>-<NUMBER>` tokens; when `links.jira_base_url` is configured, rows use the `jira` kind, targets are canonical `<base>/browse/<key>` URLs, and captured full Jira URLs deduplicate with issue-key mentions.
-- Bookmark local-file selections use `editor.command` and configured `bookmarks.open`; resolve relative links from the source Markdown file and strip local `#fragment`/`?query`.
-- Bookmark row kind labels use the configured source directory name, not the literal word `bookmark`.
+- Resolve local bookmark links from the source Markdown file; strip heading/query suffixes while retaining line anchors. Decode URI paths without expanding shell variables.
+- Bookmark row kind labels use target service/file/directory classification.
 - Do not show local hostname prefixes in pane titles.
 - Palette sections are only `agents`, `sessions`, and `panes`; do not put commands or quick dirs into `palette`.
 

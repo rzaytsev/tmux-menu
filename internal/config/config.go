@@ -35,6 +35,7 @@ var (
 )
 
 type Config struct {
+	Browser   string          `json:"browser" toml:"browser"`
 	Palette   PaletteConfig   `json:"palette" toml:"palette"`
 	Picker    PickerConfig    `json:"picker" toml:"picker"`
 	Session   SessionConfig   `json:"session" toml:"session"`
@@ -133,6 +134,7 @@ type OpenConfig struct {
 }
 
 type BookmarksConfig struct {
+	DirsBase       string     `json:"-" toml:"-"`
 	Dirs           []string   `json:"dirs" toml:"dirs"`
 	IgnorePatterns []string   `json:"ignore_patterns" toml:"ignore_patterns"`
 	Open           OpenConfig `json:"open" toml:"open"`
@@ -282,7 +284,7 @@ func Default() Config {
 			},
 		},
 		Bookmarks: BookmarksConfig{
-			Dirs:           []string{"~/notes/projects/{project}", "~/projects/{project}"},
+			Dirs:           nil,
 			IgnorePatterns: []string{".git", ".tmp", "vendor", "node_modules", ".venv"},
 			Open: OpenConfig{
 				Mode:     "pane",
@@ -462,6 +464,7 @@ func decodeConfigFile(path string, b []byte, cfg *Config, strict bool) error {
 			if err := json.Unmarshal(b, &next); err != nil {
 				return fmt.Errorf("parse %s: %w", path, err)
 			}
+			next.Bookmarks.DirsBase = filepath.Dir(path)
 			overlayAll(cfg, next)
 			return nil
 		}
@@ -476,6 +479,7 @@ func decodeConfigFile(path string, b []byte, cfg *Config, strict bool) error {
 			}
 			return fmt.Errorf("parse %s: %w", path, err)
 		}
+		next.Bookmarks.DirsBase = filepath.Dir(path)
 		overlayAll(cfg, next)
 		return nil
 	}
@@ -483,6 +487,11 @@ func decodeConfigFile(path string, b []byte, cfg *Config, strict bool) error {
 	meta, err := toml.Decode(string(b), &next)
 	if err != nil {
 		return fmt.Errorf("parse %s: %w", path, err)
+	}
+	for _, key := range meta.Undecoded() {
+		if len(key) > 0 && (key[0] == "bookmarks" || key[0] == "browser") {
+			return fmt.Errorf("validate %s: unknown config key %s", path, key.String())
+		}
 	}
 	if strict {
 		unknown := meta.Undecoded()
@@ -496,6 +505,12 @@ func decodeConfigFile(path string, b []byte, cfg *Config, strict bool) error {
 		}
 	}
 	overlayDefined(cfg, next, meta)
+	if meta.IsDefined("bookmarks", "dirs") {
+		cfg.Bookmarks.DirsBase = filepath.Dir(path)
+		if cfg.Bookmarks.Dirs == nil {
+			cfg.Bookmarks.Dirs = []string{}
+		}
+	}
 	return nil
 }
 
@@ -504,6 +519,9 @@ func overlayAll(dst *Config, src Config) {
 }
 
 func overlayDefined(dst *Config, src Config, meta toml.MetaData) {
+	if meta.IsDefined("browser") {
+		dst.Browser = src.Browser
+	}
 	if meta.IsDefined("palette", "sections") {
 		dst.Palette.Sections = src.Palette.Sections
 	}
@@ -828,9 +846,7 @@ func applyDefaults(cfg *Config) {
 	if cfg.Links.Open.PaneSide == "" {
 		cfg.Links.Open.PaneSide = def.Links.Open.PaneSide
 	}
-	if len(cfg.Bookmarks.Dirs) == 0 {
-		cfg.Bookmarks.Dirs = append([]string(nil), def.Bookmarks.Dirs...)
-	}
+
 	if len(cfg.Bookmarks.IgnorePatterns) == 0 {
 		cfg.Bookmarks.IgnorePatterns = append([]string(nil), def.Bookmarks.IgnorePatterns...)
 	}
@@ -879,6 +895,9 @@ func applyDefaults(cfg *Config) {
 }
 
 func Validate(cfg Config) error {
+	if strings.ContainsAny(cfg.Browser, "\x00\n\r\t\x1b") {
+		return fmt.Errorf("browser contains control characters")
+	}
 	seenPaletteSections := make(map[string]bool)
 	for i, section := range cfg.Palette.Sections {
 		switch section {
@@ -949,8 +968,8 @@ func Validate(cfg Config) error {
 		}
 	}
 	for i, dir := range cfg.Bookmarks.Dirs {
-		if strings.TrimSpace(dir) == "" {
-			return fmt.Errorf("bookmarks.dirs[%d] is required", i)
+		if strings.TrimSpace(dir) == "" || strings.ContainsAny(dir, "\x00\n\r\t\x1b") {
+			return fmt.Errorf("bookmarks.dirs[%d] must be a nonempty safe directory path", i)
 		}
 	}
 	for i, dir := range cfg.Docs.Dirs {
@@ -1091,7 +1110,7 @@ func validateLinkAlternateKey(key string) error {
 		return fmt.Errorf("links.alternate.key must be one fzf key without commas or whitespace")
 	}
 	switch key {
-	case "enter", "tab", "btab", "alt-1", "alt-2", "alt-3", "alt-4", "alt-5", "alt-6", "alt-7", "alt-8", "ctrl-r", "ctrl-y":
+	case "enter", "tab", "btab", "alt-1", "alt-2", "alt-3", "alt-4", "alt-5", "alt-6", "alt-7", "alt-8", "ctrl-r", "ctrl-y", "ctrl-/", "alt-f", "alt-d", "alt-g", "alt-s", "alt-a":
 		return fmt.Errorf("links.alternate.key %q is reserved for picker behavior", key)
 	default:
 		return nil
@@ -1156,7 +1175,10 @@ func validateOpenConfig(name string, cfg OpenConfig) error {
 }
 
 func Sample() string {
-	return fmt.Sprintf(`[palette]
+	return fmt.Sprintf(`# Web browser application; empty uses the system default. Workspace overrides home.
+browser = ""
+
+[palette]
 # Available sections: "agents", "sessions", "panes".
 sections = ["sessions", "panes"]
 
@@ -1284,7 +1306,7 @@ file_command = "open -a TextEdit"
 url_command = "open -a Safari"
 
 [links.open]
-# Enter opener for file links: popup, pane, or window.
+# Legacy links.open: accepted for compatibility. Typed files use a Neovim pane.
 mode = "popup"
 # Used when mode = "pane": right, left, above, or below.
 pane_side = "right"
@@ -1292,11 +1314,14 @@ pane_side = "right"
 [bookmarks]
 # Markdown directories scanned by the bookmarks view, in display order.
 # {project} expands to the current tmux project/session name.
-dirs = ["~/notes/projects/{project}", "~/projects/{project}"]
+# Omit dirs to scan the session workspace (~/notes without a workspace).
+# dirs = [] disables scanning; workspace lists replace home lists.
+# Relative paths start at the directory containing this config.
+# dirs = ["notes/bookmarks"]
 ignore_patterns = [".git", ".tmp", "vendor", "node_modules", ".venv"]
 
 [bookmarks.open]
-# Opener for local file bookmarks: popup, pane, or window.
+# Legacy bookmarks.open: accepted for compatibility. Typed files use a Neovim pane.
 mode = "pane"
 pane_side = "right"
 

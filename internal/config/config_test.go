@@ -65,7 +65,7 @@ func TestLoadMissingUsesDefaults(t *testing.T) {
 	if cfg.Status.ReportTimeout != "3s" || len(cfg.Status.Targets) != 0 {
 		t.Fatalf("unexpected status radar defaults: %#v", cfg.Status)
 	}
-	if got := strings.Join(cfg.Bookmarks.Dirs, ","); got != "~/notes/projects/{project},~/projects/{project}" {
+	if got := strings.Join(cfg.Bookmarks.Dirs, ","); got != "" {
 		t.Fatalf("unexpected bookmark dirs: %#v", cfg.Bookmarks.Dirs)
 	}
 	if got := strings.Join(cfg.Bookmarks.IgnorePatterns, ","); got != ".git,.tmp,vendor,node_modules,.venv" {
@@ -729,7 +729,7 @@ func TestSampleConfigIsToml(t *testing.T) {
 		"[[quick_dirs]]",
 		`# command = "git status"`,
 		"[bookmarks]",
-		`dirs = ["~/notes/projects/{project}", "~/projects/{project}"]`,
+		`# dirs = [] disables scanning; workspace lists replace home lists.`,
 		`ignore_patterns = [".git", ".tmp", "vendor", "node_modules", ".venv"]`,
 		"[status]",
 		`status_dir = ["./todo"]`,
@@ -853,5 +853,49 @@ pane_side = " below "
 	}
 	if cfg.Status.Open != (OpenConfig{Mode: "popup", PaneSide: "below"}) {
 		t.Fatalf("status open = %#v", cfg.Status.Open)
+	}
+}
+
+func TestTypedLinkConfigScope(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	root := filepath.Join(home, "workspace")
+	origin := filepath.Join(root, "sub")
+	if err := os.MkdirAll(origin, 0700); err != nil {
+		t.Fatal(err)
+	}
+	write := func(path, data string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(home, ".tmux-menu.conf"), "browser = 'Home Browser'\n[bookmarks]\ndirs=['home notes']\n")
+	cfg, err := LoadForContext(origin, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Browser != "Home Browser" || cfg.Bookmarks.DirsBase != home || strings.Join(cfg.Bookmarks.Dirs, ",") != "home notes" {
+		t.Fatal(cfg.Bookmarks, cfg.Browser)
+	}
+	write(filepath.Join(root, ".tmux-menu.conf"), "browser = 'Firefox'\n[bookmarks]\ndirs=['docs']\n")
+	cfg, err = LoadForContext(origin, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Browser != "Firefox" || cfg.Bookmarks.DirsBase != root || strings.Join(cfg.Bookmarks.Dirs, ",") != "docs" {
+		t.Fatal(cfg.Bookmarks, cfg.Browser)
+	}
+	write(filepath.Join(origin, ".tmux-menu.conf"), "browser = ''\n[bookmarks]\ndirs=[]\n")
+	cfg, err = LoadForContext(origin, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Browser != "" || cfg.Bookmarks.Dirs == nil || len(cfg.Bookmarks.Dirs) != 0 {
+		t.Fatal(cfg.Bookmarks, cfg.Browser)
+	}
+	write(filepath.Join(origin, ".tmux-menu.conf"), "[bookmarks]\ndirs='invalid'\n")
+	if _, err = LoadForContext(origin, root); err == nil {
+		t.Fatal("invalid list accepted")
 	}
 }

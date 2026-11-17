@@ -4,19 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 
-	"tmux-menu/internal/action"
 	"tmux-menu/internal/config"
 	"tmux-menu/internal/fileutil"
 	linkscan "tmux-menu/internal/links"
 	"tmux-menu/internal/picker"
-	"tmux-menu/internal/shellquote"
 )
 
 type bookmarkItem struct {
@@ -27,44 +23,60 @@ type bookmarkItem struct {
 	Line       int
 }
 
-var markdownLinkRE = regexp.MustCompile(`(^|[^!])\[([^\]\n]+)\]\((<[^>\n]+>|[^)\s]+)(?:\s+["'][^)]*["'])?\)`)
-
 func selectBookmarks(ctx context.Context) (picker.Result[menuItem], error) {
 	cfg, rt, err := loadConfig(ctx)
 	if err != nil {
 		return picker.Result[menuItem]{}, err
 	}
-	items, err := bookmarkItems(cfg.Bookmarks, cfg.Editor, bookmarksProjectName(rt))
+	if cfg.Bookmarks.Dirs == nil {
+		root := rt.SessionPath
+		if root == "" {
+			home, _ := os.UserHomeDir()
+			root = filepath.Join(home, "notes")
+		}
+		cfg.Bookmarks.Dirs = []string{root}
+	}
+	links, err := collectBookmarks(cfg.Bookmarks, bookmarksProjectName(rt))
 	if err != nil {
 		return picker.Result[menuItem]{}, err
 	}
-	return picker.SelectWithExpect(ctx, "bookmarks> ", items, filePickerKeys(), "Ctrl-Y copy target")
-}
-
-func bookmarkItems(cfg config.BookmarksConfig, editor config.EditorConfig, projectName string) ([]picker.Item[menuItem], error) {
-	links, err := collectBookmarks(cfg, projectName)
-	if err != nil {
-		return nil, err
-	}
-	items := make([]picker.Item[menuItem], 0, len(links))
+	var targets []linkscan.Item
 	for _, link := range links {
-		target := link.Target
-		if !isHTTPBookmark(target) {
-			target = resolveBookmarkFile(target, link.SourceFile)
+		raw := link.Target
+		if strings.HasPrefix(raw, "#") {
+			raw = filepath.Base(link.SourceFile) + raw
 		}
-		items = append(items, picker.Item[menuItem]{
-			Label: bookmarkLabel(link),
-			Value: menuItem{dispatch: bookmarkDispatch(link, editor, cfg.Open), copyTarget: target},
-		})
+		item, err := linkscan.Resolve(raw, filepath.Dir(link.SourceFile), true)
+		if err != nil {
+			continue
+		}
+		item.Title = link.Text
+		targets = append(targets, item)
 	}
-	return items, nil
+	return selectTypedLinks(ctx, "bookmarks", linkscan.Deduplicate(targets), cfg, rt)
 }
 
 func collectBookmarks(cfg config.BookmarksConfig, projectName string) ([]bookmarkItem, error) {
 	links := make([]bookmarkItem, 0)
 	seen := make(map[string]bool)
+	visited := make(map[string]bool)
 	for _, source := range bookmarkSources(cfg.Dirs, projectName) {
-		files, err := bookmarkMarkdownFiles(source.Path, cfg.IgnorePatterns)
+		if !filepath.IsAbs(source.Path) {
+			source.Path = filepath.Join(cfg.DirsBase, source.Path)
+		}
+		canonical, err := filepath.EvalSymlinks(source.Path)
+		if err != nil {
+			return nil, fmt.Errorf("bookmarks directory %s: %w", source.Path, err)
+		}
+		source.Path = canonical
+		info, err := os.Stat(source.Path)
+		if err != nil {
+			return nil, err
+		}
+		if !info.IsDir() {
+			return nil, fmt.Errorf("bookmarks directory is not a directory: %s", source.Path)
+		}
+		files, err := bookmarkMarkdownFilesVisited(context.Background(), source.Path, cfg.IgnorePatterns, visited)
 		if err != nil {
 			return nil, err
 		}
@@ -124,6 +136,9 @@ func bookmarkMarkdownFiles(root string, ignorePatterns []string) ([]string, erro
 }
 
 func bookmarkMarkdownFilesContext(ctx context.Context, root string, ignorePatterns []string) ([]string, error) {
+	return bookmarkMarkdownFilesVisited(ctx, root, ignorePatterns, nil)
+}
+func bookmarkMarkdownFilesVisited(ctx context.Context, root string, ignorePatterns []string, visited map[string]bool) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -146,6 +161,12 @@ func bookmarkMarkdownFilesContext(ctx context.Context, root string, ignorePatter
 			return err
 		}
 		if entry.IsDir() {
+			if visited != nil {
+				if visited[path] {
+					return filepath.SkipDir
+				}
+				visited[path] = true
+			}
 			if rel != "." && bookmarkPathIgnored(rel, ignorePatterns) {
 				return filepath.SkipDir
 			}
@@ -203,80 +224,11 @@ func extractBookmarksFromFile(path string, sourceName string) ([]bookmarkItem, e
 	if err != nil {
 		return nil, err
 	}
-	items := make([]bookmarkItem, 0)
-	for i, line := range strings.Split(string(b), "\n") {
-		for _, match := range markdownLinkRE.FindAllStringSubmatch(line, -1) {
-			if len(match) < 4 {
-				continue
-			}
-			text := strings.TrimSpace(match[2])
-			target := strings.Trim(strings.TrimSpace(match[3]), "<>")
-			if text == "" || target == "" || strings.HasPrefix(target, "#") {
-				continue
-			}
-			items = append(items, bookmarkItem{
-				Text:       text,
-				Target:     target,
-				SourceFile: path,
-				SourceName: sourceName,
-				Line:       i + 1,
-			})
-		}
+	var items []bookmarkItem
+	for _, link := range linkscan.Markdown(b) {
+		items = append(items, bookmarkItem{Text: link.Title, Target: link.Target, SourceFile: path, SourceName: sourceName, Line: link.Line})
 	}
 	return items, nil
-}
-
-func bookmarkDispatch(item bookmarkItem, editor config.EditorConfig, openConfig config.OpenConfig) action.Dispatch {
-	if isHTTPBookmark(item.Target) {
-		return action.Dispatch{
-			Mode: "shell",
-			Cmd:  "open " + shellquote.Quote(item.Target),
-		}
-	}
-	target := resolveBookmarkFile(item.Target, item.SourceFile)
-	return fileOpenDispatch(linkscan.Item{Kind: linkscan.KindFile, Target: target}, filepath.Dir(target), editor, openConfig)
-}
-
-func bookmarkLabel(item bookmarkItem) string {
-	source := fmt.Sprintf("%s:%d", shortenHome(item.SourceFile), item.Line)
-	sourceName := item.SourceName
-	if sourceName == "" {
-		sourceName = "bookmark"
-	}
-	return fmt.Sprintf("%s  %s  %s  %s",
-		colorKind(sourceName),
-		colorPaneTitle(item.Text),
-		dim(bookmarkTargetLabel(item.Target)),
-		dim(source),
-	)
-}
-
-func bookmarkTargetLabel(target string) string {
-	if isHTTPBookmark(target) {
-		return target
-	}
-	return shortenHome(target)
-}
-
-func isHTTPBookmark(target string) bool {
-	return strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://")
-}
-
-func resolveBookmarkFile(target string, sourceFile string) string {
-	path := strings.TrimSpace(target)
-	if u, err := url.Parse(path); err == nil && u.Scheme == "file" {
-		path = u.Path
-	}
-	path, _, _ = strings.Cut(path, "#")
-	path, _, _ = strings.Cut(path, "?")
-	if decoded, err := url.PathUnescape(path); err == nil {
-		path = decoded
-	}
-	path = expandPath(path)
-	if filepath.IsAbs(path) {
-		return filepath.Clean(path)
-	}
-	return filepath.Clean(filepath.Join(filepath.Dir(sourceFile), path))
 }
 
 func bookmarksProjectName(rt runtimeContext) string {

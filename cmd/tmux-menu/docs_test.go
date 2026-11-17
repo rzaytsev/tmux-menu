@@ -62,7 +62,7 @@ func TestCopyOnlyDoesNotOpenTarget(t *testing.T) {
 	cfg := config.Default()
 	item := menuItem{dispatch: projectDispatch("/tmp/work", ""), copyTarget: "https://example.com/it's?q=$(false)"}
 	got := dispatchForResult(picker.Result[menuItem]{Key: "ctrl-y", Value: item, Selected: true})
-	if got.Mode != "shell" || strings.Contains(got.Cmd, "open ") || !strings.Contains(got.Cmd, "pbcopy") {
+	if got.Mode != "exec" || len(got.Args) != 1 || got.Args[0] != "pbcopy" {
 		t.Fatalf("copy-only dispatch = %#v", got)
 	}
 	if !containsLinkExpectKey(linkExpectKeys(cfg.Links.Alternate), "ctrl-y") {

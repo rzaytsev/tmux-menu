@@ -1,3 +1,6 @@
+# Web browser application; empty uses the system default. Workspace overrides home.
+browser = ""
+
 [palette]
 # Available sections: "agents", "sessions", "panes".
 sections = ["sessions", "panes"]
@@ -126,7 +129,7 @@ file_command = "open -a TextEdit"
 url_command = "open -a Safari"
 
 [links.open]
-# Enter opener for file links: popup, pane, or window.
+# Legacy links.open: accepted for compatibility. Typed files use a Neovim pane.
 mode = "popup"
 # Used when mode = "pane": right, left, above, or below.
 pane_side = "right"
@@ -134,11 +137,14 @@ pane_side = "right"
 [bookmarks]
 # Markdown directories scanned by the bookmarks view, in display order.
 # {project} expands to the current tmux project/session name.
-dirs = ["~/notes/projects/{project}", "~/projects/{project}"]
+# Omit dirs to scan the session workspace (~/notes without a workspace).
+# dirs = [] disables scanning; workspace lists replace home lists.
+# Relative paths start at the directory containing this config.
+# dirs = ["notes/bookmarks"]
 ignore_patterns = [".git", ".tmp", "vendor", "node_modules", ".venv"]
 
 [bookmarks.open]
-# Opener for local file bookmarks: popup, pane, or window.
+# Legacy bookmarks.open: accepted for compatibility. Typed files use a Neovim pane.
 mode = "pane"
 pane_side = "right"
 

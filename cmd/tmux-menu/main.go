@@ -62,6 +62,11 @@ func run(ctx context.Context, args []string) error {
 		return runToolsCommand(ctx, args[1:])
 	case "projects":
 		return runPickerLoop(ctx, "projects")
+	case "link-preview":
+		if len(args) != 2 {
+			return fmt.Errorf("link-preview requires one target")
+		}
+		return previewLink(args[1])
 	case "links":
 		return runPickerLoop(ctx, "links")
 	case "bookmarks":
@@ -147,6 +152,10 @@ func runPopup(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	client, err := popupClient(ctx, rt.SessionID)
+	if err != nil {
+		return err
+	}
 	dispatchFile, err := os.CreateTemp("", "tmux-menu-dispatch-*.json")
 	if err != nil {
 		return err
@@ -173,7 +182,7 @@ func runPopup(ctx context.Context, args []string) error {
 		}
 		childArgs := append([]string{mode}, childArgTail...)
 		cmd := buildPopupCommand(exe, dispatchPath, rt, childArgs)
-		tmuxArgs := []string{"display-popup", "-E"}
+		tmuxArgs := []string{"display-popup", "-E", "-t", rt.OriginPane, "-c", client}
 		if cfg.Popup.Border == "" || cfg.Popup.Border == "none" {
 			tmuxArgs = append(tmuxArgs, "-B")
 		} else {
@@ -422,6 +431,21 @@ func runStatusCommand(ctx context.Context, command string, rt runtimeContext) er
 }
 
 func dispatchForResult(result picker.Result[menuItem]) action.Dispatch {
+	if len(result.Values) > 0 {
+		var steps []action.Dispatch
+		var targets []string
+		for _, item := range result.Values {
+			if result.Key == "ctrl-y" {
+				targets = append(targets, item.copyTarget)
+			} else {
+				steps = append(steps, dispatchForResult(picker.Result[menuItem]{Key: result.Key, Value: item}))
+			}
+		}
+		if result.Key == "ctrl-y" {
+			return linkClipboardDispatch(strings.Join(targets, "\n"))
+		}
+		return action.Dispatch{Mode: "sequence", Steps: steps}
+	}
 	item := result.Value
 	if result.Key == "ctrl-y" {
 		if item.copyTarget == "" {

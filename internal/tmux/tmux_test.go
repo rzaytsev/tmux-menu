@@ -96,6 +96,20 @@ func TestListPanesUsesTmuxCommandPath(t *testing.T) {
 	}
 }
 
+func TestListPanesFormatAvoidsControlSeparators(t *testing.T) {
+	line := framePaneFields("work:team", "$1", "api", "@2", "1", "0", "%3", "ready", "bash", "/tmp/project", "1", "1", "1234", "1", "/tmp/session")
+	// tmux 3.4 escapes a literal unit separator in command output as \037.
+	writeFakeTmux(t, "case \"$*\" in\n*'"+"\x1f"+"'*) printf 'control separator escaped by tmux\\n' >&2; exit 2 ;;\nesac\nprintf '%s\\n' '"+line+"'\n")
+
+	panes, err := ListPanes(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(panes) != 1 || panes[0].SessionName != "work:team" || panes[0].PaneID != "%3" {
+		t.Fatalf("panes = %#v", panes)
+	}
+}
+
 func framePaneFields(fields ...string) string {
 	var framed strings.Builder
 	for _, field := range fields {

@@ -351,3 +351,38 @@ func hasCall(calls [][]string, want []string) bool {
 	}
 	return false
 }
+
+func TestLocalLinkTargetsExactOriginAndRejectsStaleIdentity(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "space 'name.md")
+	if err := os.WriteFile(file, []byte("file"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	restoreList := stubActionPaneList(t, []tmux.Pane{{SessionID: "$1", WindowID: "@2", PaneID: "%3", PanePID: "404"}})
+	defer restoreList()
+	var calls [][]string
+	restoreTmux := stubActionTmux(t, func(_ context.Context, args ...string) (string, error) { calls = append(calls, args); return "", nil })
+	defer restoreTmux()
+	d := Dispatch{Mode: "link-file", SessionID: "$1", WindowID: "@2", PaneID: "%3", PanePID: 404, TargetPath: file, Cmd: "nvim -- 'file'", PaneSide: "right", WorkingDir: root}
+	if err := Execute(t.Context(), d, "%999"); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(calls[0], []string{"split-window", "-h", "-t", "%3", "-c", root, d.Cmd}) {
+		t.Fatal(calls)
+	}
+	d.TargetPath = root
+	d.Mode = "link-dir"
+	if err := Execute(t.Context(), d, "%999"); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(calls[1], []string{"new-window", "-t", "$1:", "-c", root}) {
+		t.Fatal(calls)
+	}
+	d.PanePID = 999
+	if err := Execute(t.Context(), d, ""); err == nil {
+		t.Fatal("accepted stale identity")
+	}
+	if len(calls) != 2 {
+		t.Fatal("mutated on stale identity")
+	}
+}
