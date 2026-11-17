@@ -913,9 +913,9 @@ func Validate(cfg Config) error {
 	seenTabModes := make(map[string]bool)
 	for i, mode := range cfg.Picker.TabOrder {
 		switch mode {
-		case "palette", "agents", "tools", "projects", "links", "status", "bookmarks", "docs":
+		case "palette", "agents", "tools", "projects", "links", "status", "bookmarks", "docs", "complete":
 		default:
-			return fmt.Errorf("picker.tab_order[%d] must be one of palette, agents, tools, projects, links, status, bookmarks, docs", i)
+			return fmt.Errorf("picker.tab_order[%d] must be one of palette, agents, tools, projects, links, status, bookmarks, docs, complete", i)
 		}
 		if seenTabModes[mode] {
 			return fmt.Errorf("picker.tab_order[%d] duplicates %q", i, mode)
@@ -1110,7 +1110,7 @@ func validateLinkAlternateKey(key string) error {
 		return fmt.Errorf("links.alternate.key must be one fzf key without commas or whitespace")
 	}
 	switch key {
-	case "enter", "tab", "btab", "alt-1", "alt-2", "alt-3", "alt-4", "alt-5", "alt-6", "alt-7", "alt-8", "ctrl-r", "ctrl-y", "ctrl-/", "alt-f", "alt-d", "alt-g", "alt-s", "alt-a":
+	case "enter", "tab", "btab", "alt-1", "alt-2", "alt-3", "alt-4", "alt-5", "alt-6", "alt-7", "alt-8", "alt-9", "ctrl-r", "ctrl-y", "ctrl-/", "alt-f", "alt-d", "alt-g", "alt-s", "alt-a":
 		return fmt.Errorf("links.alternate.key %q is reserved for picker behavior", key)
 	default:
 		return nil
@@ -1188,6 +1188,7 @@ show_help = false
 # Width of right-side previews in picker views.
 preview_width = "60%%"
 # View order for Tab and Shift-Tab navigation.
+# "complete" is also accepted; Alt-9 opens it directly. Tab selects inside it.
 tab_order = ["palette", "agents", "tools", "projects", "status", "bookmarks", "docs"]
 
 [session]

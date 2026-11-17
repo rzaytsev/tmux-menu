@@ -16,6 +16,7 @@ Views:
 - `bookmarks`: open typed CommonMark links from configured directories.
 - `docs`: find and preview project and notes Markdown files by title or path.
 - `status`: browse task files grouped by status directories.
+- `complete`: insert selected file/directory/Git/screen references into a draft.
 
 ## Commands
 
@@ -31,6 +32,7 @@ tmux-menu popup links
 tmux-menu popup bookmarks
 tmux-menu popup docs
 tmux-menu popup status
+tmux-menu popup complete [provider]
 ```
 
 Non-popup commands are also available:
@@ -45,6 +47,7 @@ tmux-menu links
 tmux-menu bookmarks
 tmux-menu docs
 tmux-menu status
+tmux-menu complete [provider]
 tmux-menu validate-config ~/.tmux-menu.conf
 tmux-menu sample-config
 ```
@@ -249,8 +252,8 @@ only the selected exact completion; it does not approve an agent prompt.
 
 Inside fzf picker views:
 
-- `Tab`: next view in `picker.tab_order` (multiselect in links/bookmarks)
-- `Shift-Tab`: previous view in `picker.tab_order` (select upward in links/bookmarks)
+- `Tab`: next view in `picker.tab_order` (multiselect in links/bookmarks/complete)
+- `Shift-Tab`: previous view in `picker.tab_order` (select upward in links/bookmarks/complete)
 - `Alt-1`: palette
 - `Alt-2`: agents
 - `Alt-3`: tools
@@ -259,12 +262,14 @@ Inside fzf picker views:
 - `Alt-6`: bookmarks
 - `Alt-7`: links
 - `Alt-8`: docs
+- `Alt-9`: Completion
 - `Ctrl-R`: rebuild the current picker from fresh data
 - `Ctrl-Y` in links, bookmarks, docs, and the task board: copy the target/path
   and close the picker without opening it
 - `Alt-Enter` in links: alternate opener
 
-The navigation footer is hidden; these shortcuts still work.
+The navigation footer is hidden; these shortcuts still work. Completion shows
+its own action/provider footer because its insertion keys differ from openers.
 Empty views show `No items` and remain navigable with the same shortcuts.
 
 ## tmux Bindings
@@ -425,8 +430,10 @@ sections = ["sessions", "panes"]
 - `preview_width`: width of the right-side preview in every preview-enabled
   picker. Defaults to `60%`; its height fills the picker popup.
 - `tab_order`: picker views visited by `Tab` and `Shift-Tab`, in order. Valid
-  values are `palette`, `agents`, `tools`, `projects`, `links`, `status`, and
-  `bookmarks`, and `docs`. The default omits `links`; `Alt-7` reaches it directly.
+  values are `palette`, `agents`, `tools`, `projects`, `links`, `status`,
+  `bookmarks`, `docs`, and `complete`. The default omits `links` and `complete`;
+  `Alt-7` and `Alt-9` reach them directly. Tab selects multiple items inside
+  Links, Bookmarks and Completion; use Alt-number to leave those views.
 
 ### `session`
 
@@ -982,6 +989,112 @@ opens external URLs. Run it with Python containing `pyte` (for example in a
 temporary venv); the rendered terminal is saved to
 `/tmp/tmux-menu-links-rendered.txt`. This validates the local build, independently
 of the installed launcher.
+
+## Completion
+
+`tmux-menu popup complete [provider]` opens a context finder rooted at the
+invoking pane's current directory. `tmux-menu complete [provider]` runs the same
+fzf view directly. Use `Alt-9` from another picker. This is useful when a Codex
+or Claude CLI draft needs several files or a precise Git reference.
+
+| Key inside Completion | Source/action |
+| --- | --- |
+| `Alt-F` | `files`: existing tracked and untracked, nonignored files |
+| `Alt-D` | `dirs`: directories, including hidden/empty directories |
+| `Alt-C` | `changed`: staged, unstaged, untracked; rename destinations and deleted references |
+| `Alt-B` | `branches`: local and remote branch names, omitting symbolic HEAD aliases |
+| `Alt-T` | `tags`: tag names |
+| `Alt-H` | `commits`: latest 500 across refs plus detached HEAD, inserting full object IDs |
+| `Alt-W` | `worktrees`: absolute worktree directory paths |
+| `Alt-U` | `screen`: typed URLs, Jira keys and existing local references from this pane |
+| `Ctrl-T` | Next source |
+| `Ctrl-R` | List the current source again; preserve query/selected row |
+| `Tab` / `Shift-Tab` | Mark/unmark multiple rows |
+| `Ctrl-/` | Toggle the read-only preview |
+| `Enter` | Paste literal values, joined by one space |
+| `Alt-Enter` | Paste simple file/directory values with `@` prefixes |
+| `Ctrl-S` | Paste each value separately POSIX-shell-quoted |
+| `Ctrl-Y` | Copy raw values separated by newlines; close without pasting |
+| `Escape` | Cancel |
+
+The default source is `files`. For example, `popup complete branches` starts
+with branches. Each source retains its query and selected row while switching
+sources; marked selections reset when the source refreshes or changes. Alt-number
+leaves Completion for another view. Adding `complete` to `picker.tab_order`
+allows entering it with Tab from another view; Tab inside Completion selects.
+
+No surrounding space is added and no draft text is deleted. For example, with
+the cursor between `review ` and ` carefully`, selecting `src/main.go` inserts
+`review src/main.go carefully`. Enter on `alpha space.txt` inserts that literal
+path; Ctrl-S inserts `'alpha space.txt'`. Alt-Enter accepts unambiguous local
+paths such as `@src/main.go`; whitespace, quotes and backslashes are rejected
+with a visible message so Enter or copy can be used instead. This inserts
+literal `@path` text, not a native attachment or a guarantee that a provider
+creates a mention chip. It never sends an agent request or changes agent settings.
+
+Insertion requires a single exact live session/window/pane/PID tuple with the
+same foreground command and cwd. This identity is frozen across source refreshes
+and switches and checked again after creating a private temporary paste buffer.
+The input must enable bracketed paste and be outside tmux copy mode. Otherwise,
+use Ctrl-Y to copy. Payloads are valid UTF-8, single-line, control-free and at
+most 64 KiB; no Enter or editing key is sent. A same-command process restart or
+a changed dialog within the same agent cannot be identified from these checks:
+invoke Completion while the intended draft is active. The existing `ff` Tools
+helper and Links/Docs open actions remain separate.
+
+Files are relative to the pane cwd, including when it is a subdirectory of a
+Git repo. Git ignores apply to the Files source. Directories and non-Git files
+use filesystem traversal that retains useful dotfiles but prunes `.git`, `.hg`,
+`.svn`, `node_modules`, `vendor`, `.cache`, `.next`, `.venv`, `venv`,
+`__pycache__`, `dist`, `build`, and `target`; it does not follow symlinks. The
+Dirs source does not apply Git ignore rules. Scans stop at 20,000 rows, 100,000
+visited paths or five seconds, with a visible notice. Git stdout is capped at
+8 MiB, stderr at 8 KiB; failures remain visible with source switching available.
+Sources use no network operations or Git mutations. Screen references scan up
+to 1,000 joined scrollback lines and 1 MiB; alternate-screen applications may
+have only the visible screen available. Arbitrary screen sentences and inferred
+word replacement are not included.
+
+Previews never execute project scripts. Local file reads reject nonregular
+files, omit symlinks and NUL-containing binary files, and cap input at 1 MiB and
+display at 200 lines; directories show up to 200 entries. Git object previews
+show commit metadata/stat with external diff, textconv and pagers disabled.
+Labels, errors and previews are sanitized; insertion always uses the raw value
+stored separately from the row and opaque preview token. Deleted paths have an
+unavailable-file preview and can still be referenced.
+
+Optional Prefix+Ctrl-T binding (place after TPM so it replaces an existing
+tmux-fzf-complete binding deliberately):
+
+```tmux
+bind-key C-t run-shell 'TMUX_MENU_ORIGIN_PANE=#{q:pane_id} TMUX_MENU_ORIGIN_CLIENT=#{q:client_name} "$HOME/.local/bin/tmux-menu" popup complete'
+```
+
+The same binding is in `scripts/completion.tmux`. Prefix means your tmux prefix
+(locally Ctrl-]); this does not consume Ctrl-T typed directly into an agent.
+
+To open Completion with Ctrl+Cmd+Shift+Alt+T in Ghostty, put this in its active
+configuration (locally `~/.config/ghostty/config.ghostty`), replacing the
+Bookmarks binding for the same key, then reload Ghostty's configuration:
+
+```ini
+keybind = cmd+alt+shift+ctrl+t=text:\x1d\x14
+```
+
+This sends Ctrl-] followed by Ctrl-T to the tmux binding above. The active
+Ghostty file is outside this repository; this example records the exact mapping.
+
+If the old plugin remains installed, its Ruby command remains callable as a
+fallback, or reload its `fzf-complete.tmux` to restore its binding.
+
+After building, run `python scripts/test-completion-picker.py` with a Python
+environment containing `pyte`. The disposable real tmux popup records exact
+bracketed-paste events in an input fixture with an existing prefix/suffix. It
+checks file/Git sources, preview, multiselect, formatting, navigation, refresh,
+copy/cancel, a moved origin, disabled paste mode and zero submission/edit events.
+It saves the rendered terminal to `/tmp/tmux-menu-completion-rendered.txt`.
+This establishes transport and draft preservation in the fixture; acceptance
+of `@` references in your running Codex/Claude client is a separate check.
 
 ## tmux 3.4 pane inventory
 

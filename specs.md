@@ -3,7 +3,7 @@
 ## Goal
 
 Build a small Go tool for tmux users who keep several project sessions open.
-The tool has seven user-facing views:
+The tool has nine user-facing views:
 
 1. `palette`: fuzzy-select tmux sessions and panes.
 2. `agents`: fuzzy-select live agent panes with status and a terminal preview.
@@ -12,6 +12,8 @@ The tool has seven user-facing views:
 5. `bookmarks`: fuzzy-select Markdown links from project notes and project files.
 6. `status`: fuzzy-select task files under a configured status directory.
 7. `projects`: fuzzy-select a project and create/switch tmux sessions natively.
+8. `docs`: fuzzy-select Markdown documents by title/path.
+9. `complete`: select file/directory/Git/screen references for literal insertion.
 
 The first implementation favors low complexity over custom UI polish. It uses:
 
@@ -30,6 +32,7 @@ tmux-menu popup projects
 tmux-menu popup links
 tmux-menu popup bookmarks
 tmux-menu popup status
+tmux-menu popup complete [provider]
 tmux-menu palette
 tmux-menu agents
 tmux-menu agents --picker
@@ -38,6 +41,7 @@ tmux-menu projects
 tmux-menu links
 tmux-menu bookmarks
 tmux-menu status
+tmux-menu complete [provider]
 tmux-menu validate-config [config ...]
 tmux-menu agent-run <codex|claude> [agent arguments...]
 tmux-menu agent-hook doctor
@@ -48,8 +52,8 @@ tmux-menu sample-config
 
 Inside `fzf` picker views:
 
-- `Tab`: next configured view (multiselect in links/bookmarks).
-- `Shift-Tab`: previous configured view (select upward in links/bookmarks).
+- `Tab`: next configured view (multiselect in links/bookmarks/complete).
+- `Shift-Tab`: previous configured view (select upward in links/bookmarks/complete).
 - `Alt-1`: main palette
 - `Alt-2`: agents
 - `Alt-3`: tools
@@ -58,16 +62,18 @@ Inside `fzf` picker views:
 - `Alt-6`: bookmarks
 - `Alt-7`: links
 - `Alt-8`: docs
+- `Alt-9`: complete
 - `Ctrl-R`: refresh the current picker
 - `Ctrl-Y`: copy only in links, bookmarks, docs, and directory status
 
 In the links view, `Alt-Enter` opens the selected row with the configured
 secondary opener.
 
-The navigation footer is hidden; navigation bindings remain active.
+The navigation footer is hidden; navigation bindings remain active. Completion
+has a visible footer for its insertion actions and source shortcuts.
 `picker.tab_order` controls the Tab cycle and defaults to palette, agents,
 tools, projects, status, bookmarks, then docs. Configured values may also include
-links. Cycling wraps at both ends; a view omitted from the order enters at the
+links or complete. Cycling wraps at both ends; a view omitted from the order enters at the
 first item with Tab or the last item with Shift-Tab.
 Empty views contain a non-selectable `No items` row so navigation keys continue
 to work; Enter on that row cancels the picker.
@@ -675,6 +681,63 @@ Manual checks inside tmux:
 ./tmux-menu popup links
 ./tmux-menu popup status
 ```
+
+## Completion
+
+`complete` and `popup complete [provider]` use the shared fzf picker; default
+provider is `files`. Supported providers are `files`, `dirs`, `changed`,
+`branches`, `tags`, `commits`, `worktrees`, and `screen`. Source keys are Alt-F,
+D, C, B, T, H, W, U respectively; Ctrl-T cycles, Ctrl-R refreshes. Source-local
+query/selected row survives switches; marks reset on refresh/switch. Tab marks
+multiple rows. Alt-9 enters Completion from any view; existing default tab order
+stays unchanged and accepts `complete` as an optional member.
+
+Enter inserts raw values joined by one space with no surrounding separator;
+Ctrl-S independently shell-quotes each value, Alt-Enter prefixes unambiguous
+file/directory paths with `@`, Ctrl-Y copies newline-separated raw values, and
+Escape cancels. Whitespace/quote/backslash-bearing @ references return a visible
+message without inserting. Literal @ text does not promise native agent
+attachment semantics. Values stay separate from sanitized row labels and opaque
+preview tokens. No prior word deletion, inferred editing shortcuts or submit
+key is allowed.
+
+One exact session/window/pane/PID tuple is frozen for the Completion lifetime.
+Literal insertion revalidates that tuple, cwd and foreground command before
+and after creating a unique temporary paste buffer. Require bracketed-paste
+mode and no copy mode, then use `paste-buffer -p -r` with an explicit pane,
+cleaning the buffer even on failure. Payloads must be nonempty, valid UTF-8,
+control-free and at most 64 KiB. This proves the destination pane and transport;
+same-command restarts or an agent's current input dialog remain outside that
+identity proof. Completion is for an active draft.
+
+Files list existing regular tracked and untracked/nonignored paths under the
+pane cwd, using NUL-delimited Git output. Changed includes staged, unstaged,
+untracked and deleted paths, uses rename destinations, and works without HEAD.
+Paths are relative to cwd, including nested cwd. Dirs and non-Git files traverse
+without symlink recursion and prune VCS/dependency/cache/build directories as
+listed in [usage](docs/usage.md#completion); Dirs includes hidden/empty dirs
+and does not apply Git ignore rules. Branches omit symbolic aliases; tags insert
+tag names; commits insert full IDs from the latest 500 across refs/HEAD;
+worktrees insert absolute directory paths. Screen reuses typed reference
+extraction, with joined lines and exact identity checks before/after capture.
+
+Bound filesystem scans to five seconds, 100,000 visited paths and 20,000 rows.
+Git commands have a five-second timeout, 8 MiB stdout and 8 KiB stderr limits;
+screen capture is at most 1,000 history lines and 1 MiB. Truncation and failures
+are visible rather than empty-success claims. Source switching works on empty
+and failed sources. No network or Git mutation is performed.
+
+Preview uses sanitized read-only output: regular local files up to 1 MiB and
+200 lines, directories up to 200 entries, no symlink/NUL-binary contents. Git
+metadata/stat previews use full object IDs and structured argv with external
+diff/textconv/pagers disabled. No project script is executed. Clipboard access
+is explicit. Existing Links/Bookmarks open dispatch and Tools `ff` stay separate.
+
+Real popup validation uses a disposable bracketed-paste draft fixture. Exact
+paste events, unchanged surrounding text, zero submits/edits, stale destination,
+disabled paste mode, multiselect, previews, copy/cancel and source/view switching
+are required. Installed launcher identity and native agent acceptance are
+separate verification gates.
 
 ## Things To Implement Next
 

@@ -38,6 +38,7 @@ type Dispatch struct {
 	PaneID             string     `json:"pane_id,omitempty"`
 	PanePID            int        `json:"pane_pid,omitempty"`
 	ProviderPID        int        `json:"provider_pid,omitempty"`
+	ForegroundCommand  string     `json:"foreground_command,omitempty"`
 	WindowID           string     `json:"window_id,omitempty"`
 	SessionID          string     `json:"session_id,omitempty"`
 	WindowName         string     `json:"window_name,omitempty"`
@@ -183,6 +184,8 @@ func Execute(ctx context.Context, d Dispatch, originPane string) error {
 			return err
 		}
 		return nil
+	case "insert":
+		return insert(ctx, d)
 	case "window":
 		args := []string{"new-window"}
 		if d.WorkingDir != "" {
@@ -217,6 +220,9 @@ func revalidateSwitchPane(ctx context.Context, d Dispatch) error {
 			continue
 		}
 		if pane.SessionID == d.SessionID && pane.WindowID == d.WindowID && pane.PaneID == d.PaneID && panePID == d.PanePID {
+			if d.Mode == "insert" && (pane.CurrentCommand != d.ForegroundCommand || pane.CurrentPath != d.WorkingDir) {
+				continue
+			}
 			matches++
 		}
 	}

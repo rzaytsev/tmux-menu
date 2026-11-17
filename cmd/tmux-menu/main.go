@@ -62,6 +62,13 @@ func run(ctx context.Context, args []string) error {
 		return runToolsCommand(ctx, args[1:])
 	case "projects":
 		return runPickerLoop(ctx, "projects")
+	case "complete":
+		return runCompleteCommand(ctx, args[1:])
+	case "complete-preview":
+		if len(args) != 2 {
+			return fmt.Errorf("complete-preview requires one opaque token")
+		}
+		return previewCompletion(args[1])
 	case "link-preview":
 		if len(args) != 2 {
 			return fmt.Errorf("link-preview requires one target")
@@ -112,6 +119,7 @@ Usage:
   tmux-menu popup bookmarks
   tmux-menu popup docs
   tmux-menu popup status
+  tmux-menu popup complete [provider]
   tmux-menu palette
   tmux-menu agents
   tmux-menu agents --picker
@@ -121,6 +129,7 @@ Usage:
   tmux-menu bookmarks
   tmux-menu docs
   tmux-menu status
+  tmux-menu complete [files|dirs|changed|branches|tags|commits|worktrees|screen]
   tmux-menu validate-config [config ...]
   tmux-menu agent-run <codex|claude> [agent arguments...]
   tmux-menu agent-hook ingest <codex|claude>
@@ -142,7 +151,7 @@ func runPopup(ctx context.Context, args []string) error {
 	}
 	mode := args[0]
 	if !validViewMode(mode) {
-		return fmt.Errorf("popup mode must be palette, agents, tools, projects, links, bookmarks, docs, or status")
+		return fmt.Errorf("popup mode must be palette, agents, tools, projects, links, bookmarks, docs, status, or complete")
 	}
 	rt, err := loadRuntimeContext(ctx)
 	if err != nil {
@@ -231,6 +240,9 @@ func validatePopupArgs(args []string) error {
 	if len(args) == 0 {
 		return nil
 	}
+	if args[0] == "complete" {
+		return validateCompleteArgs(args[1:])
+	}
 	if args[0] == "agents" {
 		if len(args) == 1 || len(args) == 2 && args[1] == "--picker" {
 			return nil
@@ -273,7 +285,7 @@ func buildPopupCommand(exe, dispatchPath string, rt runtimeContext, args []strin
 	return strings.Join(parts, " ")
 }
 
-var viewSwitchKeys = []string{"tab", "btab", "alt-1", "alt-2", "alt-3", "alt-4", "alt-5", "alt-6", "alt-7", "alt-8", "ctrl-r"}
+var viewSwitchKeys = []string{"tab", "btab", "alt-1", "alt-2", "alt-3", "alt-4", "alt-5", "alt-6", "alt-7", "alt-8", "alt-9", "ctrl-r"}
 
 const popupViewDispatchMode = "picker-view"
 
@@ -301,6 +313,8 @@ func viewModeForKey(key string) string {
 		return "links"
 	case "alt-8":
 		return "docs"
+	case "alt-9":
+		return "complete"
 	default:
 		return ""
 	}
@@ -327,7 +341,7 @@ func tabViewMode(current string, key string, order []string) string {
 
 func validViewMode(mode string) bool {
 	switch mode {
-	case "palette", "agents", "tools", "projects", "links", "bookmarks", "docs", "status":
+	case "palette", "agents", "tools", "projects", "links", "bookmarks", "docs", "status", "complete":
 		return true
 	default:
 		return false
@@ -477,6 +491,8 @@ func selectModeAt(ctx context.Context, mode, initialAgentPaneID string) (picker.
 		return selectDocs(ctx)
 	case "status":
 		return selectStatus(ctx)
+	case "complete":
+		return selectComplete(ctx)
 	default:
 		return picker.Result[menuItem]{}, fmt.Errorf("unknown mode %q", mode)
 	}

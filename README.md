@@ -36,9 +36,9 @@ The read-only `agent-hook snapshot` export includes exact conversation and tmux
 identity metadata for notification inboxes that display current agent state.
 Agent marks, status icons, and colors remain configurable through
 `[agents.icons]`, `[agents.colors]`, and per-session `[session].color`.
-Tab and Shift-Tab cycle through a configurable picker order, except Links and
-Bookmarks where they select multiple targets. Alt-number
-shortcuts remain available; the navigation footer is hidden.
+Tab and Shift-Tab cycle through a configurable picker order, except Links,
+Bookmarks and Completion where they select multiple targets. Alt-number
+shortcuts remain available; Completion shows its action/source help.
 Links and Bookmarks share a typed, aligned fzf picker with multiselect,
 file/directory/GitHub/Slack filters and local previews. Links reads the invoking
 pane's scrollback; Bookmarks parses CommonMark links from configured directories.
@@ -49,6 +49,14 @@ The docs picker searches Markdown titles and paths across project files and
 notes, with Space to preview and Enter to edit. Use `Alt-7` for links, `Alt-8`
 for docs, and `Ctrl-R` to refresh any picker. `Ctrl-Y` copies a link, bookmark
 target, document path, or task path without opening it.
+
+Completion (`Alt-9`, or `tmux-menu popup complete`) finds files, directories,
+changed files, branches, tags, commits, worktrees, and screen references to insert
+into a Codex/Claude draft. Tab selects multiple items; Enter pastes literal text
+without submitting, Alt-Enter inserts simple `@path` text, Ctrl-S shell-quotes,
+and Ctrl-Y copies. It freezes the invoking pane and checks its identity, command,
+cwd and bracketed-paste mode before insertion. See [Completion](docs/usage.md#completion)
+for provider keys, limits and the optional Prefix+Ctrl-T binding.
 
 ## Requirements
 
@@ -82,6 +90,8 @@ tmux-menu popup links
 tmux-menu popup bookmarks
 tmux-menu popup docs
 tmux-menu popup status
+tmux-menu popup complete
+tmux-menu popup complete branches
 tmux-menu validate-config ~/.tmux-menu.conf
 ```
 

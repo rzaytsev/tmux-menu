@@ -27,8 +27,14 @@ Work directly and keep changes small. This is a local tmux utility, not a framew
 - `bookmarks`: CommonMark inline/reference/autolinks from configured directories, excluding code and standalone images. Workspace lists replace home lists; empty lists disable scanning. Relative roots use the supplying config's directory; missing roots error. Without a list use the session workspace, then ~/notes.
 - Links/bookmarks share aligned type/title/target rows, Tab multiselect, Ctrl-Y copy, Ctrl-/ local preview, Alt-F files, Alt-D directories, Alt-G GitHub, Alt-S Slack and Alt-A all. Web dispatch uses workspace/home `browser`; slack:// opens Slack; local files open Neovim in a right pane and directories open shell windows, anchored to the exact invoking session/window/pane/PID. Legacy `links.open` and `bookmarks.open` remain accepted for config compatibility.
 - `docs`: scans Markdown titles and paths from `docs.dirs`, default notes for `{project}` plus the session root; Space previews, Enter edits, and overlapping roots deduplicate files.
+- `complete`: pane-cwd files/dirs, changed files, branches, tags, commits,
+  worktrees and screen references; Tab multiselect, Enter literal bracketed
+  paste without Enter, Alt-Enter simple @paths, Ctrl-S shell quoting, Ctrl-Y
+  copy, Ctrl-/ preview, Ctrl-T next source. Freeze exact origin identity across
+  source switches/refresh; require unchanged command/cwd and bracketed-paste
+  mode outside copy mode. Never infer draft editing keys or native attachments.
 - `status`: when `status.targets` is configured, concurrently runs one JSON reporter per named active tmux session and shows urgency-sorted project rows with a visible block preview; otherwise it runs optional project-local `status.command` or shows the directory task board from `status.status_dir` and `status.statuses`.
-- Picker views (except links/bookmarks, where Tab selects multiple) support Tab/Shift-Tab through configured `picker.tab_order` and `Alt-1` main, `Alt-2` agents, `Alt-3` tools, `Alt-4` projects, `Alt-5` status, `Alt-6` bookmarks, `Alt-7` links, and `Alt-8` docs through `fzf --expect`; Ctrl-R refreshes every picker. Ctrl-Y copies targets/paths in links, bookmarks, docs, and directory status. The navigation footer is hidden; shortcuts stay active, while `picker.show_help` controls optional view-specific help.
+- Picker views (except links/bookmarks/complete, where Tab selects multiple) support Tab/Shift-Tab through configured `picker.tab_order` and `Alt-1` main, `Alt-2` agents, `Alt-3` tools, `Alt-4` projects, `Alt-5` status, `Alt-6` bookmarks, `Alt-7` links, `Alt-8` docs, and `Alt-9` complete through `fzf --expect`; Ctrl-R refreshes every picker. Ctrl-Y copies targets/paths in links, bookmarks, docs, complete, and directory status. The navigation footer is hidden except Completion's action/source help; shortcuts stay active, while `picker.show_help` controls optional view-specific help.
 - Global config path: `~/.tmux-menu.conf`; local `.tmux-menu.conf` overlays in the session root and origin pane directory can add commands/quick dirs or replace scalar/list settings.
 
 ## Implementation Rules
@@ -77,7 +83,7 @@ Work directly and keep changes small. This is a local tmux utility, not a framew
   snapshot JSON, or a transcript store.
 - `Ctrl-X` retains exact-token completion acknowledgement; it must not approve
   agent prompts or send keys to the agent.
-- Outside links/bookmarks, Tab enters the next configured view; Alt-2 enters Agents. Relaunch a popup only when its width changes.
+- Outside links/bookmarks/complete, Tab enters the next configured view; Alt-2 enters Agents. Relaunch a popup only when its width changes.
   Both `agents` and `agents --picker` exit on cancellation.
 - The dedicated Agents popup width comes from `agents.popup_width`, default
   `100%`.

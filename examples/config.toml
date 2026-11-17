@@ -11,6 +11,7 @@ show_help = false
 # Width of right-side previews in picker views.
 preview_width = "60%"
 # View order for Tab and Shift-Tab navigation.
+# "complete" is also accepted; Alt-9 opens it directly. Tab selects inside it.
 tab_order = ["palette", "agents", "tools", "projects", "status", "bookmarks", "docs"]
 
 [session]
